@@ -890,6 +890,19 @@ function renderAssembleCard(assembleEntries) {
       const rv = document.createElement("span"); rv.className = "lcm-kv-value"; rv.textContent = String(v??"");
       row.appendChild(rl); row.appendChild(rv); section.appendChild(row);
     }
+    if (d.systemPromptAddition) {
+      const spRow = document.createElement("details");
+      spRow.className = "lcm-messages-section";
+      const spSum = document.createElement("summary");
+      spSum.textContent = "\u{1f4dd} System Prompt Addition";
+      spRow.appendChild(spSum);
+      const spText = document.createElement("pre");
+      spText.className = "lcm-msg-text";
+      spText.style.maxHeight = "200px";
+      spText.textContent = d.systemPromptAddition;
+      spRow.appendChild(spText);
+      section.appendChild(spRow);
+    }
     const asm = d.assembledMessages || [];
     if (asm.length > 0) section.appendChild(renderAssembleMsgList(asm));
     body.appendChild(section);
@@ -900,6 +913,7 @@ function renderAssembleCard(assembleEntries) {
     const section = document.createElement("details");
     section.className = "lcm-messages-section";
     const sum = document.createElement("summary");
+    const sysPrompt = d.systemPromptAddition;
     const outMsgs = d.messages || [];
     const outTokSum = outMsgs.reduce((s, m) => s + (m.tokens || 0), 0);
     sum.textContent = "\u{1f4e4} \u7ec4\u88c5\u8f93\u51fa\uff08" + (d.outputMessagesCount||0) + " \u6761\uff0c" + fmt(outTokSum) + " tok\uff09";
@@ -916,6 +930,19 @@ function renderAssembleCard(assembleEntries) {
       const rl = document.createElement("span"); rl.className = "lcm-kv-label"; rl.textContent = "\u8282\u7701";
       const rv = document.createElement("span"); rv.className = "lcm-kv-value lcm-saving"; rv.textContent = fmt(saved) + " tokens (-" + (d.savingPct||0) + "%)";
       row.appendChild(rl); row.appendChild(rv); section.appendChild(row);
+    }
+    if (sysPrompt) {
+      const spRow = document.createElement("details");
+      spRow.className = "lcm-messages-section";
+      const spSum = document.createElement("summary");
+      spSum.textContent = "\u{1f4dd} System Prompt Addition";
+      spRow.appendChild(spSum);
+      const spText = document.createElement("pre");
+      spText.className = "lcm-msg-text";
+      spText.style.maxHeight = "200px";
+      spText.textContent = sysPrompt;
+      spRow.appendChild(spText);
+      section.appendChild(spRow);
     }
     const msgs = d.messages || [];
     if (msgs.length > 0) section.appendChild(renderAssembleMsgList(msgs));
