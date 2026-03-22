@@ -1,4 +1,4 @@
-﻿"""LCM diagnostics CLI 鈥?parse and filter lcm-diagnostics.jsonl."""
+"""LCM diagnostics CLI 鈥?parse and filter lcm-diagnostics.jsonl."""
 
 from __future__ import annotations
 
