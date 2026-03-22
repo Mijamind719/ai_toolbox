@@ -825,9 +825,17 @@ function renderAssembleCard(assembleEntries) {
     const rv = document.createElement("span"); rv.className = "lcm-kv-value" + (k.includes("\u8282\u7701") ? " lcm-saving" : ""); rv.textContent = v;
     row.appendChild(rl); row.appendChild(rv); sumPanel.appendChild(row);
   }
+  const framingTok = inputTok - outputTok;
+  const noteLines = [
+    "\u2139 token \u8ba1\u6570\u5dee\u5f02\u8bf4\u660e\uff1a",
+    "  \u00b7 \u8f93\u5165 " + fmt(inputTok) + " = \u6d88\u606f\u5185\u5bb9 " + fmt(outputTok) + " + \u5bf9\u8bdd\u683c\u5f0f\u6807\u8bb0 " + fmt(framingTok) + "\uff08\u5982 [user]\u3001[assistant] \u7b49\u89d2\u8272\u6807\u7b7e\uff09",
+    "  \u00b7 \u7ec4\u88c5\u540e " + fmt(outputTok) + " = \u5b9e\u9645\u53d1\u9001\u7ed9\u6a21\u578b\u7684\u5185\u5bb9 token",
+    "  \u00b7 \u6d88\u606f\u5217\u8868\u4e2d\u7684 tok \u4e3a\u7c97\u4f30\u503c\uff0c\u4e0e\u4e0a\u8ff0\u6570\u503c\u53ef\u80fd\u6709\u5dee\u5f02",
+  ];
   const note = document.createElement("div");
   note.className = "lcm-assemble-note";
-  note.textContent = "\u2139 \u8f93\u5165 tokens \u542b API \u6d88\u606f\u7ed3\u6784\u6807\u8bb0(role/separator)\uff0c\u7ec4\u88c5\u540e\u4e3a engine tokenizer \u5b9e\u9645\u8ba1\u6570\uff0c\u6d88\u606f\u5217\u8868\u4e2d\u7684 tok \u4e3a text.length/4 \u7c97\u4f30";
+  note.textContent = noteLines.join("\n");
+  note.style.whiteSpace = "pre-wrap";
   sumPanel.appendChild(note);
   body.appendChild(sumPanel);
 
