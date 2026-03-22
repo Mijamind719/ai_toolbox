@@ -753,6 +753,121 @@ function renderLcmStep(entry) {
   return step;
 }
 
+function renderAssembleMsgList(msgs) {
+  const list = document.createElement("div");
+  list.className = "lcm-messages-list";
+  for (const m of msgs) {
+    const el = document.createElement("div");
+    const kind = m.kind || "raw";
+    el.className = "lcm-msg lcm-msg-" + (m.role || "unknown") + (kind === "summary" ? " lcm-msg-summary" : "");
+    const roleEl = document.createElement("span");
+    roleEl.className = "lcm-msg-role";
+    roleEl.textContent = (kind === "summary" ? "\u2702 " : "") + (m.role || "?");
+    const tokEl = document.createElement("span");
+    tokEl.className = "lcm-msg-tokens";
+    tokEl.textContent = `${fmt(m.tokens)} tok` + (kind === "summary" ? " [\u6458\u8981]" : "");
+    const textEl = document.createElement("div");
+    textEl.className = "lcm-msg-text";
+    textEl.textContent = m.preview || m.content || "(empty)";
+    el.appendChild(roleEl);
+    el.appendChild(tokEl);
+    el.appendChild(textEl);
+    list.appendChild(el);
+  }
+  return list;
+}
+
+function renderAssembleCard(assembleEntries) {
+  const card = document.createElement("div");
+  card.className = "stage-card stage-lcm";
+  const header = document.createElement("div");
+  header.className = "lcm-step-header";
+  const label = document.createElement("span");
+  label.className = "lcm-step-stage";
+  label.textContent = "Assemble \u4e0a\u4e0b\u6587\u7ec4\u88c5";
+  const timeLabel = document.createElement("span");
+  timeLabel.className = "lcm-step-time";
+  timeLabel.textContent = formatTs(assembleEntries[0]?.ts);
+  header.appendChild(label);
+  header.appendChild(timeLabel);
+  card.appendChild(header);
+  const body = document.createElement("div");
+  body.className = "lcm-step-body";
+
+  const inputEntry = assembleEntries.find(e => e.stage === "assemble_input");
+  const contextEntry = assembleEntries.find(e => e.stage === "context_assemble");
+  const outputEntry = assembleEntries.find(e => e.stage === "assemble_output");
+
+  if (inputEntry) {
+    const d = inputEntry.data || {};
+    const section = document.createElement("details");
+    section.className = "lcm-messages-section";
+    const sum = document.createElement("summary");
+    sum.textContent = "\u{1f4e5} \u5386\u53f2\u4e0a\u4e0b\u6587\u6d88\u606f\uff08" + (d.messagesCount||0) + " \u6761\uff0c" + fmt(d.inputTokenEstimate||0) + " tok\uff09";
+    section.appendChild(sum);
+    const meta = document.createElement("div");
+    meta.className = "lcm-kv";
+    const ml = document.createElement("span"); ml.className = "lcm-kv-label"; ml.textContent = "tokenBudget";
+    const mv = document.createElement("span"); mv.className = "lcm-kv-value"; mv.textContent = fmt(d.tokenBudget);
+    meta.appendChild(ml); meta.appendChild(mv);
+    section.appendChild(meta);
+    if (d.hasSummaryItems) {
+      const m2 = document.createElement("div"); m2.className = "lcm-kv";
+      const m2l = document.createElement("span"); m2l.className = "lcm-kv-label"; m2l.textContent = "\u542b\u6458\u8981";
+      const m2v = document.createElement("span"); m2v.className = "lcm-kv-value"; m2v.textContent = "\u662f";
+      m2.appendChild(m2l); m2.appendChild(m2v); section.appendChild(m2);
+    }
+    const msgs = d.messages || [];
+    if (msgs.length > 0) section.appendChild(renderAssembleMsgList(msgs));
+    body.appendChild(section);
+  }
+
+  if (contextEntry) {
+    const d = contextEntry.data || {};
+    const section = document.createElement("details");
+    section.className = "lcm-messages-section";
+    const sc = d.summaryCount||0, rc = d.rawMessageCount||0, fc = d.freshTailCount||0;
+    const sum = document.createElement("summary");
+    sum.textContent = "\u{1f527} LCM \u7ec4\u88c5\u7ed3\u679c\uff08raw=" + rc + ", summaries=" + sc + ", freshTail=" + fc + ", " + fmt(d.estimatedTokens||0) + " tok\uff09";
+    section.appendChild(sum);
+    const kvs = [
+      ["\u539f\u59cb\u6d88\u606f", rc], ["\u6458\u8981\u6761\u6570", sc],
+      ["\u4fdd\u62a4\u5c3e\u90e8", fc], ["\u5c3e\u90e8 tokens", fmt(d.tailTokens)],
+      ["\u9884\u4f30 tokens", fmt(d.estimatedTokens)], ["tokenBudget", fmt(d.tokenBudget)]
+    ];
+    for (const [k, v] of kvs) {
+      const row = document.createElement("div"); row.className = "lcm-kv";
+      const rl = document.createElement("span"); rl.className = "lcm-kv-label"; rl.textContent = k;
+      const rv = document.createElement("span"); rv.className = "lcm-kv-value"; rv.textContent = String(v??"");
+      row.appendChild(rl); row.appendChild(rv); section.appendChild(row);
+    }
+    const asm = d.assembledMessages || [];
+    if (asm.length > 0) section.appendChild(renderAssembleMsgList(asm));
+    body.appendChild(section);
+  }
+
+  if (outputEntry) {
+    const d = outputEntry.data || {};
+    const section = document.createElement("details");
+    section.className = "lcm-messages-section";
+    const sum = document.createElement("summary");
+    sum.textContent = "\u{1f4e4} \u7ec4\u88c5\u8f93\u51fa\uff08" + (d.outputMessagesCount||0) + " \u6761\uff0c" + fmt(d.estimatedTokens||0) + " tok\uff09";
+    section.appendChild(sum);
+    const saved = d.tokensSaved || 0;
+    if (saved > 0) {
+      const row = document.createElement("div"); row.className = "lcm-kv";
+      const rl = document.createElement("span"); rl.className = "lcm-kv-label"; rl.textContent = "\u8282\u7701";
+      const rv = document.createElement("span"); rv.className = "lcm-kv-value lcm-saving"; rv.textContent = fmt(saved) + " tokens (-" + (d.savingPct||0) + "%)";
+      row.appendChild(rl); row.appendChild(rv); section.appendChild(row);
+    }
+    const msgs = d.messages || [];
+    if (msgs.length > 0) section.appendChild(renderAssembleMsgList(msgs));
+    body.appendChild(section);
+  }
+
+  card.appendChild(body);
+  return card;
+}
 function renderIngestBatchCard(entries) {
   const card = document.createElement("div");
   card.className = "stage-card stage-lcm";
@@ -874,8 +989,13 @@ function renderRound(roundBlocks, roundIndex, traceIdx) {
   }
 
   // 2. Pre-HTTP LCM (bootstrap, assemble)
-  for (const le of preLcm) {
+  const assembleGroup = preLcm.filter(e => ["assemble_input","context_assemble","assemble_output"].includes(e.stage));
+  const otherPreLcm = preLcm.filter(e => !["assemble_input","context_assemble","assemble_output"].includes(e.stage));
+  for (const le of otherPreLcm) {
     timeline.push({ type: "lcm", entry: le });
+  }
+  if (assembleGroup.length > 0) {
+    timeline.push({ type: "assemble_group", entries: assembleGroup });
   }
 
   // 3. HTTP blocks (gateway->model, model->gateway, tool calls)
@@ -932,6 +1052,8 @@ function renderRound(roundBlocks, roundIndex, traceIdx) {
         item.entry = { ...item.entry, _leafPassNum: leafPassCount };
       }
       container.appendChild(renderLcmAsCard(item.entry));
+    } else if (item.type === "assemble_group") {
+      container.appendChild(renderAssembleCard(item.entries));
     } else if (item.type === "lcm_batch") {
       container.appendChild(renderIngestBatchCard(item.entries));
     } else {
