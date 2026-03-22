@@ -803,10 +803,16 @@ function renderAssembleCard(assembleEntries) {
     const section = document.createElement("details");
     section.className = "lcm-messages-section";
     const sum = document.createElement("summary");
-    sum.textContent = "\u{1f4e5} \u5386\u53f2\u4e0a\u4e0b\u6587\u6d88\u606f\uff08" + (d.messagesCount||0) + " \u6761\uff0c" + fmt(d.inputTokenEstimate||0) + " tok\uff09";
+    const inputMsgs = d.messages || [];
+    const inputMsgTokens = inputMsgs.reduce((s, m) => s + (m.tokens || 0), 0);
+    sum.textContent = "\u{1f4e5} \u5386\u53f2\u4e0a\u4e0b\u6587\u6d88\u606f\uff08" + (d.messagesCount||0) + " \u6761\uff0c" + fmt(inputMsgTokens) + " tok\uff09";
     section.appendChild(sum);
     const meta = document.createElement("div");
     meta.className = "lcm-kv";
+    const estRow = document.createElement("div"); estRow.className = "lcm-kv";
+    const estL = document.createElement("span"); estL.className = "lcm-kv-label"; estL.textContent = "inputTokenEstimate";
+    const estV = document.createElement("span"); estV.className = "lcm-kv-value"; estV.textContent = fmt(d.inputTokenEstimate) + " (含开销)";
+    estRow.appendChild(estL); estRow.appendChild(estV); section.appendChild(estRow);
     const ml = document.createElement("span"); ml.className = "lcm-kv-label"; ml.textContent = "tokenBudget";
     const mv = document.createElement("span"); mv.className = "lcm-kv-value"; mv.textContent = fmt(d.tokenBudget);
     meta.appendChild(ml); meta.appendChild(mv);
