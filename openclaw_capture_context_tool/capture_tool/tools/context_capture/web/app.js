@@ -592,11 +592,15 @@ function renderLcmStep(entry) {
     kvPairs.push(["原因", d.reason || "unknown"]);
     kvPairs.push(["原始消息数", d.messagesCount]);
     if (d.contextItemsCount != null) kvPairs.push(["context items", d.contextItemsCount]);
+    if (d.tokenBudget) kvPairs.push(["tokenBudget", fmt(d.tokenBudget)]);
+    if (d.evictableTokens != null) kvPairs.push(["可清除 tokens", fmt(d.evictableTokens)]);
 
   } else if (entry.stage === "afterTurn_entry") {
     kvPairs.push(["总消息数", d.totalMessages]);
     kvPairs.push(["新消息数", d.newMessageCount]);
+    kvPairs.push(["prePrompt 消息数", d.prePromptMessageCount]);
     kvPairs.push(["是否 heartbeat", d.isHeartbeat ? "是" : "否"]);
+    if (d.hasAutoCompactionSummary) kvPairs.push(["包含自动压缩摘要", "是"]);
 
   } else if (entry.stage === "ingest") {
     kvPairs.push(["角色", d.role || "?"]);
@@ -612,8 +616,11 @@ function renderLcmStep(entry) {
 
   } else if (entry.stage === "compaction_evaluate") {
     kvPairs.push(["当前 tokens", fmt(d.currentTokens)]);
-    kvPairs.push(["阈值", `${fmt(d.threshold)} (${Math.round((d.contextThreshold || 0) * 100)}%)`]);
+    kvPairs.push(["tokenBudget", fmt(d.tokenBudget)]);
+    kvPairs.push(["contextThreshold", d.contextThreshold]);
+    kvPairs.push(["压缩阈值", `${fmt(d.threshold)} (${((d.contextThreshold || 0) * 100).toFixed(1)}%)`]);
     kvPairs.push(["需要压缩", d.shouldCompact ? "是" : "否"]);
+    if (d.reason && d.reason !== "none") kvPairs.push(["原因", d.reason]);
 
   } else if (entry.stage === "leaf_pass_detail") {
     kvPairs.push(["输入消息数", d.inputMessageCount]);
