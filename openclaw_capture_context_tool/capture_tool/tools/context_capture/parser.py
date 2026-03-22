@@ -11,8 +11,8 @@ from urllib.parse import urlparse
 from tools.context_capture.models import EventRecord
 
 
-MODEL_RESPONSE_PATHS = {"/v1/responses"}
-MODEL_RESPONSE_PATH_PREFIXES = ("/api/coding/v3",)
+MODEL_RESPONSE_PATHS = {"/v1/responses", "/v1/messages", "/v1/chat/completions"}
+MODEL_RESPONSE_PATH_PREFIXES = ("/api/coding/v3", "/anthropic/v1/",)
 NO_WEB_SEARCH_SUFFIX_RE = re.compile(r"\s*no web search\s*$", re.IGNORECASE)
 UPSTREAM_MATCH_LOOKBACK_MS = 5 * 60 * 1000
 
