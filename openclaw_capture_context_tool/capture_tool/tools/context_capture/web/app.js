@@ -21,6 +21,17 @@ function formatTs(ts) {
 }
 function isObj(v) { return v !== null && typeof v === "object" && !Array.isArray(v); }
 function fmt(v) { return Number.isFinite(v) ? Math.trunc(v).toLocaleString() : "0"; }
+function engineBadgeClass(engineId) {
+  if (engineId === "lossless-claw") return "engine-lossless-claw";
+  if (engineId === "openviking") return "engine-openviking";
+  return "engine-unknown";
+}
+function engineBadgeText(engineId, engineLabel) {
+  if (typeof engineLabel === "string" && engineLabel) return engineLabel;
+  if (engineId === "lossless-claw") return "lossless-claw";
+  if (engineId === "openviking") return "OpenViking";
+  return "unknown";
+}
 
 // --------------- direction helpers ---------------
 
@@ -1044,63 +1055,17 @@ function renderRound(roundBlocks, roundIndex, traceIdx) {
     }
   }
 
-  // Collect LCM entries for this round
-  const roundStartTs = roundBlocks[0]?.events?.[0]?.ts;
-  const roundEndTs = endTs;
-  const lcmEntries = findLcmEntriesForRound(roundStartTs, roundEndTs, traceIdx);
-
-  // Split LCM entries by semantic phase
-  const PRE_HTTP_STAGES = new Set([
-    "bootstrap_entry", "bootstrap_import", "bootstrap_result",
-    "assemble_skip", "assemble_input", "context_assemble", "assemble_output",
-  ]);
-  const preLcm = lcmEntries.filter(e => PRE_HTTP_STAGES.has(e.stage));
-  const postLcm = lcmEntries.filter(e => !PRE_HTTP_STAGES.has(e.stage));
-
-  // Build unified timeline by semantic order
   const timeline = [];
 
-  // 1. User input
   if (userBlock) {
     timeline.push({ type: "http", block: userBlock });
   }
 
-  // 2. Pre-HTTP LCM (bootstrap, assemble)
-  const assembleGroup = preLcm.filter(e => ["assemble_input","context_assemble","assemble_output"].includes(e.stage));
-  const otherPreLcm = preLcm.filter(e => !["assemble_input","context_assemble","assemble_output"].includes(e.stage));
-  for (const le of otherPreLcm) {
-    timeline.push({ type: "lcm", entry: le });
-  }
-  if (assembleGroup.length > 0) {
-    timeline.push({ type: "assemble_group", entries: assembleGroup });
-  }
-
-  // 3. HTTP blocks (gateway->model, model->gateway, tool calls)
   for (const block of allBlocks) {
     if (block.direction === "gateway->ui") continue;
     timeline.push({ type: "http", block });
   }
 
-  // 4. Post-HTTP LCM (afterTurn, ingest, compaction) — sorted by timestamp
-  // Merge consecutive ingest entries into one ingestBatch entry
-  const postLcmSorted = [...postLcm].sort((a, b) => (a.ts || 0) - (b.ts || 0));
-  let ingestGroup = [];
-  for (const le of postLcmSorted) {
-    if (le.stage === "ingest") {
-      ingestGroup.push(le);
-    } else {
-      if (ingestGroup.length > 0) {
-        timeline.push({ type: "lcm_batch", entries: ingestGroup });
-        ingestGroup = [];
-      }
-      timeline.push({ type: "lcm", entry: le });
-    }
-  }
-  if (ingestGroup.length > 0) {
-    timeline.push({ type: "lcm_batch", entries: ingestGroup });
-  }
-
-  // 5. Output block
   let outputBlock = roundBlocks[roundBlocks.length - 1]?.direction === "gateway->ui"
     ? roundBlocks[roundBlocks.length - 1] : null;
   if (!outputBlock) {
@@ -1119,25 +1084,11 @@ function renderRound(roundBlocks, roundIndex, traceIdx) {
     timeline.push({ type: "http", block: outputBlock });
   }
 
-  // Render unified timeline
-  let leafPassCount = 0;
   for (let i = 0; i < timeline.length; i++) {
     const item = timeline[i];
-    if (item.type === "lcm") {
-      if (item.entry.stage === "leaf_pass_detail") {
-        leafPassCount++;
-        item.entry = { ...item.entry, _leafPassNum: leafPassCount };
-      }
-      container.appendChild(renderLcmAsCard(item.entry));
-    } else if (item.type === "assemble_group") {
-      container.appendChild(renderAssembleCard(item.entries));
-    } else if (item.type === "lcm_batch") {
-      container.appendChild(renderIngestBatchCard(item.entries));
-    } else {
-      const summary = buildBlockSummary(item.block);
-      const isMiddle = item.block.direction !== "user->gateway" && item.block.direction !== "gateway->ui";
-      container.appendChild(renderBlockCard(summary, isMiddle));
-    }
+    const summary = buildBlockSummary(item.block);
+    const isMiddle = item.block.direction !== "user->gateway" && item.block.direction !== "gateway->ui";
+    container.appendChild(renderBlockCard(summary, isMiddle));
     if (i < timeline.length - 1) {
       container.appendChild(renderInternalArrow());
     }
@@ -1218,14 +1169,29 @@ function renderSessionList() {
     btn.className = "session-item"
       + (String(trace.trace_id) === String(state.selectedTraceId) ? " is-selected" : "")
       + (isInternal ? " session-internal" : "");
+
+    const titleRow = document.createElement("div");
+    titleRow.className = "session-title-row";
     const title = document.createElement("div");
     title.className = "session-title";
     title.textContent = (isInternal ? "[LCM 内部] " : "") + `trace ${trace.trace_id} | ${trace.event_count || 0} events`;
+    titleRow.appendChild(title);
+    const badge = document.createElement("span");
+    badge.className = `engine-badge ${engineBadgeClass(trace.engine_id)}`;
+    badge.textContent = engineBadgeText(trace.engine_id, trace.engine_label);
+    titleRow.appendChild(badge);
+
     const sub = document.createElement("div");
     sub.className = "session-subtitle";
     sub.textContent = formatTs(trace.start_ts);
-    btn.appendChild(title);
+    btn.appendChild(titleRow);
     btn.appendChild(sub);
+    if (typeof trace.preview_text === "string" && trace.preview_text) {
+      const preview = document.createElement("div");
+      preview.className = "session-preview";
+      preview.textContent = trace.preview_text;
+      btn.appendChild(preview);
+    }
     btn.addEventListener("click", () => void selectTrace(trace.trace_id));
     container.appendChild(btn);
   }
@@ -1246,6 +1212,7 @@ function renderSessionMeta() {
   const pills = [
     `trace ${item.trace_id}`,
     `${item.event_count || 0} events`,
+    `engine: ${engineBadgeText(item.engine_id, item.engine_label)}`,
     item.completeness || "",
     `${formatTs(item.start_ts)} - ${formatTs(item.end_ts)}`,
   ].filter(Boolean);
@@ -1258,45 +1225,13 @@ function renderSessionMeta() {
 }
 
 function mergeAdjacentTraces(traces) {
-  if (traces.length <= 1) return traces;
-
-  // Find afterTurn timestamps — these mark round boundaries
-  const afterTurnTimestamps = state.lcmDiagnostics
-    .filter(e => e.stage === "afterTurn_entry")
-    .map(e => e.ts)
-    .sort((a, b) => a - b);
-
-  function hasAfterTurnBetween(tsA, tsB) {
-    return afterTurnTimestamps.some(at => at > tsA && at < tsB);
-  }
-
-  const merged = [];
-  let current = { events: [...(traces[0]?.events || [])], sourceIndices: [0] };
-
-  for (let i = 1; i < traces.length; i++) {
-    const prev = traces[i - 1];
-    const cur = traces[i];
-    const prevEnd = prev?.events?.[prev.events.length - 1]?.ts || 0;
-    const curStart = cur?.events?.[0]?.ts || 0;
-    const gap = curStart - prevEnd;
-
-    // Merge if: gap < 5s AND no afterTurn event between them
-    // (afterTurn marks end of a user turn, so a new turn starts after it)
-    if (gap < 5000 && gap >= 0 && !hasAfterTurnBetween(prevEnd, curStart)) {
-      current.events.push(...(cur.events || []));
-      current.sourceIndices.push(i);
-    } else {
-      merged.push(current);
-      current = { events: [...(cur?.events || [])], sourceIndices: [i] };
-    }
-  }
-  merged.push(current);
-  return merged;
+  return traces;
 }
 
 function renderSingleTrace(container, trace, roundOffset, traceIdx) {
-  if (!isObj(trace) || !Array.isArray(trace.events) || trace.events.length === 0) return 0;
-  const blocks = groupIntoBlocks(trace.events);
+  const events = Array.isArray(trace?.common?.events) ? trace.common.events : trace?.events;
+  if (!isObj(trace) || !Array.isArray(events) || events.length === 0) return 0;
+  const blocks = groupIntoBlocks(events);
   const rounds = groupBlocksIntoRounds(blocks);
   for (let i = 0; i < rounds.length; i++) {
     container.appendChild(renderRound(rounds[i], roundOffset + i, traceIdx));
@@ -1308,12 +1243,9 @@ function renderFlow() {
   const container = getElement("flow-list");
   if (!container) return;
   container.replaceChildren();
-  resetLcmClaimed();
 
   if (state.showAllMode && state.allTraces.length > 0) {
     const mergedGroups = mergeAdjacentTraces(state.allTraces);
-    // Pre-assign LCM entries to merged groups
-    preAssignLcmToMergedGroups(mergedGroups);
     let roundIdx = 0;
     for (let g = 0; g < mergedGroups.length; g++) {
       const group = mergedGroups[g];
@@ -1330,7 +1262,8 @@ function renderFlow() {
   }
 
   const trace = state.selectedTrace;
-  if (!isObj(trace) || !Array.isArray(trace.events) || trace.events.length === 0) {
+  const events = Array.isArray(trace?.common?.events) ? trace.common.events : trace?.events;
+  if (!isObj(trace) || !Array.isArray(events) || events.length === 0) {
     const empty = document.createElement("div");
     empty.className = "panel-empty";
     empty.textContent = state.showAllMode ? "正在加载..." : "暂无对话数据。";
@@ -1341,20 +1274,140 @@ function renderFlow() {
   renderSingleTrace(container, trace, 0);
 }
 
+function renderEngineDiagnostics() {
+  const container = getElement("engine-diagnostics");
+  if (!container) return;
+  container.replaceChildren();
+
+  if (state.showAllMode) {
+    const empty = document.createElement("div");
+    empty.className = "panel-empty";
+    empty.textContent = "全量视图下不展示 engine 专属诊断，请选择单条 trace 查看。";
+    container.appendChild(empty);
+    return;
+  }
+
+  const trace = state.selectedTrace;
+  const engine = trace?.engine;
+  if (!isObj(trace) || !isObj(engine)) {
+    const empty = document.createElement("div");
+    empty.className = "panel-empty";
+    empty.textContent = "请选择左侧会话查看 engine 诊断。";
+    container.appendChild(empty);
+    return;
+  }
+
+  const header = document.createElement("div");
+  header.className = "engine-panel-header";
+  const title = document.createElement("h3");
+  title.className = "engine-panel-title";
+  title.textContent = `Engine 诊断 · ${engineBadgeText(engine.id, engine.label)}`;
+  header.appendChild(title);
+  const summary = document.createElement("div");
+  summary.className = "engine-summary";
+  const summaryItems = Array.isArray(engine.summary) ? engine.summary : [];
+  if (summaryItems.length > 0) {
+    for (const item of summaryItems) {
+      const pill = document.createElement("span");
+      pill.className = "engine-summary-pill";
+      pill.textContent = `${item.label}: ${item.value}`;
+      summary.appendChild(pill);
+    }
+  }
+  header.appendChild(summary);
+  container.appendChild(header);
+
+  const sections = Array.isArray(engine.sections) ? engine.sections : [];
+  if (sections.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "panel-empty";
+    empty.textContent = engine.id === "unknown"
+      ? "当前 trace 没有匹配到专属 context engine 诊断，仍可查看上方通用链路。"
+      : "当前 trace 已识别到 engine，但没有捕获到可展示的专属诊断。";
+    container.appendChild(empty);
+    return;
+  }
+
+  const list = document.createElement("div");
+  list.className = "engine-section-list";
+  for (const section of sections) {
+    const card = document.createElement("section");
+    card.className = `engine-section-card kind-${section.kind || "summary"}`;
+
+    const cardHeader = document.createElement("div");
+    cardHeader.className = "engine-section-header";
+    const cardTitle = document.createElement("div");
+    cardTitle.className = "engine-section-title";
+    cardTitle.textContent = section.title || section.kind || "Section";
+    cardHeader.appendChild(cardTitle);
+    const cardTime = document.createElement("div");
+    cardTime.className = "engine-section-time";
+    const start = formatTs(section.started_at);
+    const end = formatTs(section.ended_at);
+    cardTime.textContent = start && end && start !== end ? `${start} - ${end}` : (start || end || "");
+    cardHeader.appendChild(cardTime);
+    card.appendChild(cardHeader);
+
+    const body = document.createElement("div");
+    body.className = "engine-section-body";
+
+    if (Array.isArray(section.stats) && section.stats.length > 0) {
+      const stats = document.createElement("div");
+      stats.className = "engine-stats";
+      for (const stat of section.stats) {
+        const pill = document.createElement("span");
+        pill.className = "engine-stat";
+        pill.textContent = `${stat.label}: ${stat.value}`;
+        stats.appendChild(pill);
+      }
+      body.appendChild(stats);
+    }
+
+    if (Array.isArray(section.items) && section.items.length > 0) {
+      const items = document.createElement("div");
+      items.className = "engine-items";
+      for (const item of section.items) {
+        const itemEl = document.createElement("div");
+        itemEl.className = "engine-item" + (item.tone === "warning" ? " warning" : "");
+        const labelEl = document.createElement("div");
+        labelEl.className = "engine-item-label";
+        labelEl.textContent = item.label || "Item";
+        const valueEl = document.createElement("div");
+        valueEl.className = "engine-item-value";
+        valueEl.textContent = item.value || "";
+        itemEl.appendChild(labelEl);
+        itemEl.appendChild(valueEl);
+        items.appendChild(itemEl);
+      }
+      body.appendChild(items);
+    }
+
+    if (Array.isArray(section.raw_refs) && section.raw_refs.length > 0) {
+      const details = document.createElement("details");
+      details.className = "engine-raw";
+      const detailsSummary = document.createElement("summary");
+      detailsSummary.textContent = `原始引用 (${section.raw_refs.length})`;
+      details.appendChild(detailsSummary);
+      for (const rawRef of section.raw_refs) {
+        const pre = document.createElement("pre");
+        pre.textContent = `${rawRef.label}\n${rawRef.value}`;
+        details.appendChild(pre);
+      }
+      body.appendChild(details);
+    }
+
+    card.appendChild(body);
+    list.appendChild(card);
+  }
+  container.appendChild(list);
+}
+
 function renderAll() {
   renderSessionList();
   renderSessionMeta();
   renderFlow();
+  renderEngineDiagnostics();
   setText("session-filter-note", state.filterNote);
-}
-
-async function refreshLcmDiagnostics() {
-  try {
-    const data = await fetchJson("/api/lcm-diagnostics");
-    state.lcmDiagnostics = Array.isArray(data) ? data : [];
-  } catch {
-    // keep existing
-  }
 }
 
 async function selectTrace(traceId) {
@@ -1364,7 +1417,6 @@ async function selectTrace(traceId) {
   if (showBtn) showBtn.classList.remove("is-active");
 
   state.selectedTraceId = String(traceId);
-  await refreshLcmDiagnostics();
   const cached = state.traceCache[state.selectedTraceId];
   if (cached) { state.selectedTrace = cached; renderAll(); return; }
   const token = ++state.loadingToken;
@@ -1386,13 +1438,9 @@ async function selectTrace(traceId) {
 
 async function loadTimelineAndSelect() {
   try {
-    const [timeline, lcmDiag] = await Promise.all([
-      fetchJson("/api/timeline"),
-      fetchJson("/api/lcm-diagnostics").catch(() => []),
-    ]);
+    const timeline = await fetchJson("/api/timeline");
     if (!Array.isArray(timeline)) throw new Error("bad data");
     state.timeline = timeline;
-    state.lcmDiagnostics = Array.isArray(lcmDiag) ? lcmDiag : [];
     const visible = buildVisibleTimeline(timeline);
     state.visibleTimeline = visible.list;
     state.filterNote = visible.note;
@@ -1437,9 +1485,8 @@ async function clearCaptureData() {
 
 async function showAllTraces() {
   state.showAllMode = true;
-    state.selectedTraceId = null;
-    state.selectedTrace = null;
-  await refreshLcmDiagnostics();
+  state.selectedTraceId = null;
+  state.selectedTrace = null;
 
   const btn = getElement("show-all-button");
   if (btn) btn.classList.add("is-active");
@@ -1490,6 +1537,7 @@ async function showAllTraces() {
   }
   renderSessionList();
   renderFlow();
+  renderEngineDiagnostics();
 }
 
 async function exitShowAll() {

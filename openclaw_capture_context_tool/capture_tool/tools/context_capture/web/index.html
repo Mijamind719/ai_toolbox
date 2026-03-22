@@ -84,8 +84,24 @@
       .session-item:hover { background: #f8faff; }
       .session-item.is-selected { border-color: var(--blue); background: #f0f5ff; }
       .session-item.session-internal { opacity: 0.5; font-size: 11px; }
-      .session-title { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
-      .session-subtitle { font-size: 12px; color: var(--ink); line-height: 1.35; }
+      .session-title-row {
+        display: flex; align-items: center; justify-content: space-between; gap: 8px;
+        margin-bottom: 4px;
+      }
+      .session-title { font-size: 11px; color: var(--muted); }
+      .session-subtitle { font-size: 12px; color: var(--ink); line-height: 1.45; }
+      .session-preview {
+        margin-top: 6px; color: var(--ink); font-size: 13px; line-height: 1.45;
+        display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+      }
+      .engine-badge {
+        display: inline-flex; align-items: center;
+        padding: 2px 8px; border-radius: 999px;
+        font-size: 11px; font-weight: 700; white-space: nowrap;
+      }
+      .engine-badge.engine-lossless-claw { background: #f3e8ff; color: #7c3aed; }
+      .engine-badge.engine-openviking { background: #e0f2fe; color: #0369a1; }
+      .engine-badge.engine-unknown { background: #eef2f7; color: #607089; }
 
       .panel-empty { padding: 14px; color: var(--muted); font-size: 13px; }
 
@@ -102,6 +118,78 @@
       .flow-list {
         padding: 16px 20px;
         max-height: calc(100vh - 200px); overflow: auto;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .engine-panel {
+        padding: 16px 20px;
+        max-height: 45vh; overflow: auto;
+        background: #fcfdff;
+      }
+      .engine-panel-header {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 12px; margin-bottom: 12px;
+      }
+      .engine-panel-title {
+        margin: 0; font-size: 14px; font-weight: 700; color: var(--accent);
+      }
+      .engine-summary {
+        display: flex; flex-wrap: wrap; gap: 6px;
+      }
+      .engine-summary-pill {
+        padding: 3px 8px; border-radius: 999px; background: #eef3ff;
+        color: var(--accent); font-size: 11px; font-weight: 600;
+      }
+      .engine-section-list {
+        display: grid; gap: 12px;
+      }
+      .engine-section-card {
+        border: 1px solid var(--line); border-radius: 10px; background: var(--card);
+        overflow: hidden;
+      }
+      .engine-section-card.kind-warning { border-color: #f5c2c7; background: #fff9f9; }
+      .engine-section-header {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line);
+        background: #f8faff;
+      }
+      .engine-section-title {
+        font-size: 13px; font-weight: 700; color: var(--ink);
+      }
+      .engine-section-time {
+        font-size: 11px; color: var(--muted);
+      }
+      .engine-section-body { padding: 10px 12px; }
+      .engine-stats {
+        display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px;
+      }
+      .engine-stat {
+        padding: 3px 8px; border-radius: 999px; background: #f0f3f8;
+        color: var(--muted); font-size: 11px; font-weight: 600;
+      }
+      .engine-items {
+        display: grid; gap: 8px;
+      }
+      .engine-item {
+        border: 1px solid #edf1f6; border-radius: 8px; background: #fbfcfe;
+        padding: 8px 10px;
+      }
+      .engine-item.warning { border-color: #f5c2c7; background: #fff8f8; }
+      .engine-item-label {
+        margin-bottom: 4px; color: var(--muted); font-size: 11px; font-weight: 700;
+      }
+      .engine-item-value {
+        white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.5;
+      }
+      .engine-raw {
+        margin-top: 10px;
+      }
+      .engine-raw summary {
+        cursor: pointer; color: var(--accent); font-size: 11px; font-weight: 600;
+      }
+      .engine-raw pre {
+        margin: 8px 0 0; padding: 10px; border-radius: 8px; background: #0f172a;
+        color: #e2e8f0; font-size: 11px; line-height: 1.45; overflow: auto;
       }
 
       /* --- Round container --- */
@@ -316,6 +404,7 @@
           <div class="panel-header">对话流向</div>
           <div id="session-meta" class="detail-meta"></div>
           <div id="flow-list" class="flow-list"></div>
+          <div id="engine-diagnostics" class="engine-panel"></div>
         </section>
       </main>
     </div>

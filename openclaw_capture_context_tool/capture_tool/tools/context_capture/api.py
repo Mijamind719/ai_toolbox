@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
 from tools.context_capture.correlator import correlate_events
+from tools.context_capture.engine_adapters import build_engine_payload, extract_trace_preview, load_diagnostics_context
 from tools.context_capture.parser import parse_raw_record, parse_raw_records
 from tools.context_capture.storage import JsonlStore
 
@@ -459,31 +460,47 @@ def _event_sort_key(event: Any) -> tuple[int, int]:
     return (1, 0)
 
 
-def _trace_detail(trace_id: str, trace: dict[str, Any]) -> dict[str, Any]:
+def _trace_detail(trace_id: str, trace: dict[str, Any], *, diagnostics_context: dict[str, Any]) -> dict[str, Any]:
     events = trace.get("events", [])
     ordered_events = _aggregate_trace_events(events)
+    start_ts = events[0].ts if events else None
+    end_ts = events[-1].ts if events else None
+    engine = build_engine_payload(trace, context=diagnostics_context)
     return {
         "trace_id": trace_id,
+        "start_ts": start_ts,
+        "end_ts": end_ts,
+        "preview_text": extract_trace_preview(trace),
         "correlation_confidence": trace.get("correlation_confidence"),
         "completeness": trace.get("completeness"),
         "missing_reasons": trace.get("missing_reasons"),
+        "common": {
+            "event_count": len(events),
+            "events": [_trace_event_payload(event) for event in ordered_events],
+        },
+        "engine": engine,
         "events": [_trace_event_payload(event) for event in ordered_events],
     }
 
 
-def _timeline_item(trace_id: str, trace: dict[str, Any]) -> dict[str, Any]:
+def _timeline_item(trace_id: str, trace: dict[str, Any], *, diagnostics_context: dict[str, Any]) -> dict[str, Any]:
     events = trace.get("events", [])
     start_ts = events[0].ts if events else None
     end_ts = events[-1].ts if events else None
+    engine = build_engine_payload(trace, context=diagnostics_context)
 
     return {
         "trace_id": trace_id,
         "event_count": len(events),
         "start_ts": start_ts,
         "end_ts": end_ts,
+        "preview_text": extract_trace_preview(trace),
         "correlation_confidence": trace.get("correlation_confidence"),
         "completeness": trace.get("completeness"),
         "missing_reasons": trace.get("missing_reasons"),
+        "engine_id": engine.get("id"),
+        "engine_label": engine.get("label"),
+        "has_engine_sections": bool(engine.get("sections")),
     }
 
 
@@ -821,11 +838,16 @@ def create_app(*, data_dir: Path) -> FastAPI:
     @app.get("/api/timeline")
     def get_timeline() -> list[dict[str, Any]]:
         traces = _load_traces(data_dir)
-        return [_timeline_item(str(index), trace) for index, trace in enumerate(traces)]
+        diagnostics_context = load_diagnostics_context(data_dir)
+        return [
+            _timeline_item(str(index), trace, diagnostics_context=diagnostics_context)
+            for index, trace in enumerate(traces)
+        ]
 
     @app.get("/api/trace/{trace_id}")
     def get_trace(trace_id: str) -> dict[str, Any]:
         traces = _load_traces(data_dir)
+        diagnostics_context = load_diagnostics_context(data_dir)
         if not trace_id.isdigit():
             raise HTTPException(status_code=404, detail="trace not found")
 
@@ -833,7 +855,7 @@ def create_app(*, data_dir: Path) -> FastAPI:
         if index < 0 or index >= len(traces):
             raise HTTPException(status_code=404, detail="trace not found")
 
-        return _trace_detail(trace_id, traces[index])
+        return _trace_detail(trace_id, traces[index], diagnostics_context=diagnostics_context)
 
     @app.get("/api/compare/memory-tokens")
     def get_memory_token_compare(
