@@ -253,7 +253,7 @@ function buildBlockSummary(block) {
     const model = first.model || "unknown";
     const msgs = Array.isArray(first.messages) ? first.messages : [];
     const lastUser = lastUserMessage(msgs);
-    result.title = lastUser ? (lastUser.length > 100 ? lastUser.slice(0, 100) + "..." : lastUser) : "(api request)";
+    result.title = lastUser || "(api request)";
     result.meta.push(`模型: ${model}`);
     if (msgs.length > 0) result.meta.push(`消息数: ${msgs.length}`);
     if (first.max_tokens) result.meta.push(`max_tokens: ${first.max_tokens}`);
@@ -262,17 +262,17 @@ function buildBlockSummary(block) {
     let sysText = "";
     if (typeof sys === "string") sysText = sys;
     else if (Array.isArray(sys)) sysText = sys.map(s => (isObj(s) ? s.text : "") || "").filter(Boolean).join("\n");
-    if (sysText) result.fields.push({ label: "system prompt", value: sysText.length > 500 ? sysText.slice(0, 500) + "..." : sysText, long: true });
+    if (sysText) result.fields.push({ label: "system prompt", value: sysText, long: true });
     for (const m of msgs) {
       if (!isObj(m)) continue;
       const text = extractTextFromContent(m.content);
       if (!text) continue;
-      result.fields.push({ label: `[${m.role || "?"}]`, value: text.length > 300 ? text.slice(0, 300) + "..." : text, long: true });
+      result.fields.push({ label: `[${m.role || "?"}]`, value: text, long: true });
     }
 
   } else if (direction === "model->gateway") {
     const merged = mergeModelStreamEvents(events);
-    result.title = merged.text || (merged.reasoning ? `[thinking] ${merged.reasoning.slice(0, 100)}...` : "(model response)");
+    result.title = merged.text || (merged.reasoning ? `[thinking] ${merged.reasoning}` : "(model response)");
     if (merged.usage) {
       result.meta.push(`input: ${fmt(merged.usage.input)}`);
       result.meta.push(`output: ${fmt(merged.usage.output)}`);
@@ -287,7 +287,7 @@ function buildBlockSummary(block) {
       result.lines.push(`[tool calls] ${merged.toolCalls.map(tc => tc.name).join(", ")}`);
     }
     if (merged.text) result.fields.push({ label: "回复内容", value: merged.text, long: true });
-    if (merged.reasoning) result.fields.push({ label: "推理过程", value: merged.reasoning.length > 500 ? merged.reasoning.slice(0, 500) + "..." : merged.reasoning, long: true });
+    if (merged.reasoning) result.fields.push({ label: "推理过程", value: merged.reasoning, long: true });
     if (merged.toolCalls.length > 0) {
       for (const tc of merged.toolCalls) {
         result.fields.push({ label: `工具调用: ${tc.name}`, value: tc.args || "(no args)", long: true });
