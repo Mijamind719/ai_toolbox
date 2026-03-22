@@ -834,12 +834,14 @@ function renderAssembleCard(assembleEntries) {
     section.className = "lcm-messages-section";
     const sc = d.summaryCount||0, rc = d.rawMessageCount||0, fc = d.freshTailCount||0;
     const sum = document.createElement("summary");
-    sum.textContent = "\u{1f527} LCM \u7ec4\u88c5\u7ed3\u679c\uff08raw=" + rc + ", summaries=" + sc + ", freshTail=" + fc + ", " + fmt(d.estimatedTokens||0) + " tok\uff09";
+    const asmMsgs = d.assembledMessages || [];
+    const asmTokSum = asmMsgs.reduce((s, m) => s + (m.tokens || 0), 0);
+    sum.textContent = "\u{1f527} LCM \u7ec4\u88c5\u7ed3\u679c\uff08raw=" + rc + ", summaries=" + sc + ", freshTail=" + fc + ", " + fmt(asmTokSum) + " tok\uff09";
     section.appendChild(sum);
     const kvs = [
       ["\u539f\u59cb\u6d88\u606f", rc], ["\u6458\u8981\u6761\u6570", sc],
       ["\u4fdd\u62a4\u5c3e\u90e8", fc], ["\u5c3e\u90e8 tokens", fmt(d.tailTokens)],
-      ["\u9884\u4f30 tokens", fmt(d.estimatedTokens)], ["tokenBudget", fmt(d.tokenBudget)]
+      ["estimatedTokens", fmt(d.estimatedTokens) + " (\u542b\u5f00\u9500)"], ["tokenBudget", fmt(d.tokenBudget)]
     ];
     for (const [k, v] of kvs) {
       const row = document.createElement("div"); row.className = "lcm-kv";
@@ -857,8 +859,16 @@ function renderAssembleCard(assembleEntries) {
     const section = document.createElement("details");
     section.className = "lcm-messages-section";
     const sum = document.createElement("summary");
-    sum.textContent = "\u{1f4e4} \u7ec4\u88c5\u8f93\u51fa\uff08" + (d.outputMessagesCount||0) + " \u6761\uff0c" + fmt(d.estimatedTokens||0) + " tok\uff09";
+    const outMsgs = d.messages || [];
+    const outTokSum = outMsgs.reduce((s, m) => s + (m.tokens || 0), 0);
+    sum.textContent = "\u{1f4e4} \u7ec4\u88c5\u8f93\u51fa\uff08" + (d.outputMessagesCount||0) + " \u6761\uff0c" + fmt(outTokSum) + " tok\uff09";
     section.appendChild(sum);
+    if (d.estimatedTokens) {
+      const etRow = document.createElement("div"); etRow.className = "lcm-kv";
+      const etL = document.createElement("span"); etL.className = "lcm-kv-label"; etL.textContent = "estimatedTokens";
+      const etV = document.createElement("span"); etV.className = "lcm-kv-value"; etV.textContent = fmt(d.estimatedTokens) + " (\u542b\u5f00\u9500)";
+      etRow.appendChild(etL); etRow.appendChild(etV); section.appendChild(etRow);
+    }
     const saved = d.tokensSaved || 0;
     if (saved > 0) {
       const row = document.createElement("div"); row.className = "lcm-kv";
