@@ -37,6 +37,8 @@ def _normalize_headers(headers: Optional[Mapping[str, Any]]) -> dict[str, str]:
 def _decode_body(body: Optional[BytesLike]) -> Optional[str]:
     if body is None:
         return None
+    if isinstance(body, str):
+        return body
     return bytes(body).decode("utf-8", errors="replace")
 
 
@@ -182,7 +184,7 @@ class ContextCaptureAddon:
             method=str(getattr(req, "method", "")),
             url=request_url,
             headers=getattr(req, "headers", None),
-            body=getattr(req, "raw_content", None),
+            body=getattr(req, "content", None),
         )
         store.append(record)
 
@@ -207,7 +209,7 @@ class ContextCaptureAddon:
             method=str(getattr(req, "method", "")),
             url=request_url,
             headers=getattr(resp, "headers", None),
-            body=getattr(resp, "raw_content", None),
+            body=getattr(resp, "content", None),
             status_code=getattr(resp, "status_code", None),
         )
         store.append(record)

@@ -1,4 +1,4 @@
-"""Local API scaffold for context capture tool."""
+﻿"""Local API scaffold for context capture tool."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
 from tools.context_capture.correlator import correlate_events
+from tools.context_capture.engine_adapters import build_engine_payload, extract_trace_preview, load_diagnostics_context
 from tools.context_capture.parser import parse_raw_record, parse_raw_records
 from tools.context_capture.storage import JsonlStore
 
@@ -204,6 +205,29 @@ def _load_traces(data_dir: Path) -> list[dict[str, Any]]:
     events.extend(_parse_gateway_tool_events(data_dir, run_to_flow=run_to_flow))
 
     return correlate_events(events)
+
+
+def _capture_file_paths(data_dir: Path) -> list[Path]:
+    paths = [
+        data_dir / "raw.jsonl",
+        data_dir / "cache-trace.jsonl",
+        data_dir / "gateway.log.jsonl",
+    ]
+    extra_cache_trace_file = os.environ.get("CONTEXT_CAPTURE_CACHE_TRACE_FILE", "").strip()
+    if extra_cache_trace_file:
+        extra_path = Path(extra_cache_trace_file)
+        if extra_path not in paths:
+            paths.append(extra_path)
+    return paths
+
+
+def _clear_capture_files(data_dir: Path) -> list[str]:
+    cleared: list[str] = []
+    for path in _capture_file_paths(data_dir):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+        cleared.append(str(path))
+    return cleared
 
 
 def _redact_payload(value: Any) -> Any:
@@ -436,31 +460,47 @@ def _event_sort_key(event: Any) -> tuple[int, int]:
     return (1, 0)
 
 
-def _trace_detail(trace_id: str, trace: dict[str, Any]) -> dict[str, Any]:
+def _trace_detail(trace_id: str, trace: dict[str, Any], *, diagnostics_context: dict[str, Any]) -> dict[str, Any]:
     events = trace.get("events", [])
     ordered_events = _aggregate_trace_events(events)
+    start_ts = events[0].ts if events else None
+    end_ts = events[-1].ts if events else None
+    engine = build_engine_payload(trace, context=diagnostics_context)
     return {
         "trace_id": trace_id,
+        "start_ts": start_ts,
+        "end_ts": end_ts,
+        "preview_text": extract_trace_preview(trace),
         "correlation_confidence": trace.get("correlation_confidence"),
         "completeness": trace.get("completeness"),
         "missing_reasons": trace.get("missing_reasons"),
+        "common": {
+            "event_count": len(events),
+            "events": [_trace_event_payload(event) for event in ordered_events],
+        },
+        "engine": engine,
         "events": [_trace_event_payload(event) for event in ordered_events],
     }
 
 
-def _timeline_item(trace_id: str, trace: dict[str, Any]) -> dict[str, Any]:
+def _timeline_item(trace_id: str, trace: dict[str, Any], *, diagnostics_context: dict[str, Any]) -> dict[str, Any]:
     events = trace.get("events", [])
     start_ts = events[0].ts if events else None
     end_ts = events[-1].ts if events else None
+    engine = build_engine_payload(trace, context=diagnostics_context)
 
     return {
         "trace_id": trace_id,
         "event_count": len(events),
         "start_ts": start_ts,
         "end_ts": end_ts,
+        "preview_text": extract_trace_preview(trace),
         "correlation_confidence": trace.get("correlation_confidence"),
         "completeness": trace.get("completeness"),
         "missing_reasons": trace.get("missing_reasons"),
+        "engine_id": engine.get("id"),
+        "engine_label": engine.get("label"),
+        "has_engine_sections": bool(engine.get("sections")),
     }
 
 
@@ -798,11 +838,16 @@ def create_app(*, data_dir: Path) -> FastAPI:
     @app.get("/api/timeline")
     def get_timeline() -> list[dict[str, Any]]:
         traces = _load_traces(data_dir)
-        return [_timeline_item(str(index), trace) for index, trace in enumerate(traces)]
+        diagnostics_context = load_diagnostics_context(data_dir)
+        return [
+            _timeline_item(str(index), trace, diagnostics_context=diagnostics_context)
+            for index, trace in enumerate(traces)
+        ]
 
     @app.get("/api/trace/{trace_id}")
     def get_trace(trace_id: str) -> dict[str, Any]:
         traces = _load_traces(data_dir)
+        diagnostics_context = load_diagnostics_context(data_dir)
         if not trace_id.isdigit():
             raise HTTPException(status_code=404, detail="trace not found")
 
@@ -810,7 +855,7 @@ def create_app(*, data_dir: Path) -> FastAPI:
         if index < 0 or index >= len(traces):
             raise HTTPException(status_code=404, detail="trace not found")
 
-        return _trace_detail(trace_id, traces[index])
+        return _trace_detail(trace_id, traces[index], diagnostics_context=diagnostics_context)
 
     @app.get("/api/compare/memory-tokens")
     def get_memory_token_compare(
@@ -823,6 +868,62 @@ def create_app(*, data_dir: Path) -> FastAPI:
             scenario_a_prefix=scenario_a_prefix,
             scenario_b_prefix=scenario_b_prefix,
         )
+
+    _lcm_cache: dict[str, Any] = {"mtime": 0.0, "size": 0, "entries": []}
+
+    @app.get("/api/lcm-diagnostics")
+    def get_lcm_diagnostics(
+        session_id: str | None = None,
+        stage: str | None = None,
+        after_ts: int | None = None,
+    ) -> list[dict[str, Any]]:
+        lcm_path = os.environ.get("LCM_DIAGNOSTICS_PATH")
+        lcm_log = Path(os.path.expanduser(lcm_path)) if lcm_path else Path.home() / ".openclaw" / "lcm-diagnostics.jsonl"
+        if not lcm_log.exists():
+            return []
+
+        try:
+            stat = lcm_log.stat()
+            cur_mtime = stat.st_mtime
+            cur_size = stat.st_size
+        except OSError:
+            return []
+
+        if cur_mtime != _lcm_cache["mtime"] or cur_size != _lcm_cache["size"]:
+            entries: list[dict[str, Any]] = []
+            try:
+                for raw_line in lcm_log.read_text(encoding="utf-8", errors="replace").splitlines():
+                    raw_line = raw_line.strip()
+                    if not raw_line:
+                        continue
+                    try:
+                        parsed = json.loads(raw_line)
+                        if isinstance(parsed, dict):
+                            entries.append(parsed)
+                    except json.JSONDecodeError:
+                        continue
+            except OSError:
+                return []
+            _lcm_cache["mtime"] = cur_mtime
+            _lcm_cache["size"] = cur_size
+            _lcm_cache["entries"] = entries
+
+        result = _lcm_cache["entries"]
+
+        if session_id:
+            result = [e for e in result if e.get("sessionId") == session_id]
+        if stage:
+            stages = set(stage.split(","))
+            result = [e for e in result if e.get("stage") in stages]
+        if after_ts is not None:
+            result = [e for e in result if isinstance(e.get("ts"), (int, float)) and e["ts"] > after_ts]
+
+        return result
+
+    @app.post("/api/clear-capture")
+    def clear_capture() -> dict[str, Any]:
+        cleared = _clear_capture_files(data_dir)
+        return {"ok": True, "cleared_files": cleared}
 
     @app.get("/")
     def get_web_root() -> FileResponse:

@@ -1,157 +1,90 @@
-# OpenClaw Session Capture Toolkit (Portable Bundle)
+# OpenClaw Context-Engine 可观测工具
+对 OpenClaw 的 context-engine 插件（当前为 lossless-claw）进行全链路观测，包括 HTTP 流量抓包、LCM 诊断分析、Web UI 可视化。
+## 目录结构要求
 
-这是可分发给其他用户的单目录版本。  
-目标是把代理配置、抓包链路和导出流程打包好，拿到目录即可抓真实 OpenClaw 会话。
+本工具需要和 `lossless-claw` 仓库作为兄弟目录放置：
+```
+parent_dir/
+  ai_toolbox/                    <- 本仓库
+    openclaw_capture_context_tool/
+      deploy_test_env.sh
+      openclaw_capture_toolkit.sh
+      使用指南.md
+      ...
+  lossless-claw/                 <- lossless-claw 仓库
+    src/
+    package.json
+    ...
+```
 
-## 1. 包含内容
+## 前置条件
 
-- `openclaw_capture_toolkit.sh`
-- `env.example`
-- `capture_tool/tools/context_capture/*`
-- `capture_tool/tools/context_capture/web/*`
-- `export_session_capture_html.py`
-- `requirements.txt`
+| 依赖 | 版本 | 说明 |
+|------|------|------|
+| Linux/WSL2 | - | 不支持 Windows 原生 |
+| Node.js | 18+ | OpenClaw 运行时 |
+| Python | 3.10+ | Capture API |
+| OpenClaw | 已安装 | openclaw configure 已完成 |
+| 模型 API Key | 已配置 | 在 OpenClaw 中配置好 provider 凭据 |
 
-## 2. 前置依赖
-
-必需：
-- `python3`
-- `mitmdump`（或在 `.env` 中设置 `MITMDUMP_BIN`）
-
-安装依赖：
+## 快速开始
+### 方式一：隔离测试部署（推荐新用户）
 
 ```bash
-python3 -m pip install -r requirements.txt
-python3 -m pip install --user "mitmproxy>=11.0.0"
+# 1. 克隆两个仓库到同一父目录
+mkdir my-openclaw-tools && cd my-openclaw-tools
+git clone <ai_toolbox_repo> ai_toolbox
+git clone <lossless-claw_repo> lossless-claw
+
+# 2. 一键部署测试环境
+cd ai_toolbox/openclaw_capture_context_tool
+bash deploy_test_env.sh
+
+# 3. 按输出提示启动（两个终端）
+# 终端1:
+cd ~/openclaw-test-deploy/ai_toolbox && ./openclaw_capture_toolkit.sh start
+# 终端2:
+LCM_DIAGNOSTICS_PATH=~/.openclaw-test/lcm-diagnostics.jsonl \
+HTTP_PROXY=http://127.0.0.1:28080 \
+HTTPS_PROXY=http://127.0.0.1:28080 \
+NODE_TLS_REJECT_UNAUTHORIZED=0 \
+openclaw --profile test gateway run --port 28789
+
+# 4. 发送测试请求
+LCM_DIAGNOSTICS_PATH=~/.openclaw-test/lcm-diagnostics.jsonl \
+HTTP_PROXY=http://127.0.0.1:28080 \
+HTTPS_PROXY=http://127.0.0.1:28080 \
+NODE_TLS_REJECT_UNAUTHORIZED=0 \
+openclaw --profile test agent -m "hello" --session-id "test"
+
+# 5. 打开 Web UI: http://127.0.0.1:9001/
 ```
 
-## 3. 快速开始（推荐）
-
-1) 配置
+deploy_test_env.sh 自动处理: npm install、Python venv、.env 生成、profile 创建、plugin 配置、auth 复制。
+### 方式二：直接使用（已有环境）
 
 ```bash
-cp env.example .env
+cd ai_toolbox/openclaw_capture_context_tool
+./openclaw_capture_toolkit.sh setup    # 检测环境、安装依赖
+cp env.example .env                    # 编辑配置
+./openclaw_capture_toolkit.sh up       # 启动全栈
 ```
 
-说明：脚本会自动加载同目录 `.env`，不需要每次手动 `source .env`。
+## 主要功能
 
-2) 一键启动（抓包栈 + 网关）
+- **Web UI**：会话轨迹时间线 + LCM 诊断面板 + Assemble 上下文组装可视化
+- **命令行诊断**：`./openclaw_capture_toolkit.sh diag --round 2 --stage compaction_evaluate`
+- **API 过滤**：`/api/lcm-diagnostics?session_id=X&stage=Y&after_ts=Z`
+- **测试数据复现**：`test-fixtures/` 包含可重放的诊断数据
 
-```bash
-./openclaw_capture_toolkit.sh up
-```
+## lossless-claw 新增环境变量
 
-说明：
-- 若 `GATEWAY_BASE_URL` 对应端口已经有可访问网关，工具会自动复用该网关。
-- 若该端口没有网关且 `openclaw` 不在 PATH，请在 `.env` 设置 `OPENCLAW_BIN`（支持指向 `openclaw.mjs`）。
-- 推荐优先使用独立端口，避免与现有服务冲突，例如：
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| LCM_DIAGNOSTICS_ENABLED | true | 设为 false 关闭诊断写入 |
+| LCM_DIAGNOSTICS_PATH | ~/.openclaw/lcm-diagnostics.jsonl | 自定义诊断文件路径 |
 
-```bash
-GATEWAY_BASE_URL=http://127.0.0.1:30790 ./openclaw_capture_toolkit.sh up
-```
+## 详细文档
 
-3) 清空旧数据
-
-```bash
-./openclaw_capture_toolkit.sh clear
-```
-
-4) 通过封装代理执行真实会话命令
-
-```bash
-./openclaw_capture_toolkit.sh proxy-run -- curl -sS http://127.0.0.1:30789/
-```
-
-注意：`proxy-run --` 后必须是真实可执行命令，不要写 `<你的会话命令>` 占位符。
-
-5) 打开网页查看
-
-```text
-http://127.0.0.1:<CAPTURE_API_PORT>/
-```
-
-6) 导出离线单文件 HTML（可分享）
-
-```bash
-./openclaw_capture_toolkit.sh export-offline --output ./output/session_capture_offline.html
-```
-
-## 4. 可选链路验证
-
-```bash
-./openclaw_capture_toolkit.sh request --prompt "请只回复: OK" --user "capture-demo"
-```
-
-`request` 默认通过抓包代理转发。  
-如果返回 `401 Unauthorized`，通常是当前 `GATEWAY_TOKEN` 与目标网关不一致，设置 `GATEWAY_TOKEN` 或改用工具托管的独立网关端口即可。
-
-## 5. 常用命令
-
-```bash
-./openclaw_capture_toolkit.sh status
-./openclaw_capture_toolkit.sh gateway-status
-./openclaw_capture_toolkit.sh proxy-env
-./openclaw_capture_toolkit.sh instructions
-./openclaw_capture_toolkit.sh down
-```
-
-## 6. 常见问题
-
-1) `address already in use`（端口占用）
-
-```bash
-MITM_PORT=18082 CAPTURE_PROXY_URL=http://127.0.0.1:18082 \
-CAPTURE_API_PORT=8001 CAPTURE_API_URL=http://127.0.0.1:8001 \
-./openclaw_capture_toolkit.sh up
-```
-
-2) `openclaw binary not found`
-
-- 在 `.env` 设置 `OPENCLAW_BIN=/绝对路径/openclaw.mjs`；或
-- 把 `GATEWAY_BASE_URL` 指向已有可访问网关（`up` 会自动复用）。
-
-3) `request` 返回 `401`
-
-- 目标网关 token 不匹配，设置 `.env` 中的 `GATEWAY_TOKEN=` 为目标网关 token。
-
-4) `status` 本地 `cache-trace.jsonl lines=0`，但出现 `external cache-trace file`
-
-- 说明 OpenClaw 配置固定了 `diagnostics.cacheTrace.filePath`，工具已自动接入该外部文件。
-
-## 7. 归档前脱敏建议
-
-以下目录/文件可能包含 token、用户名路径或会话内容，不建议直接对外归档：
-- `data/context_capture_live/*.jsonl`
-- `output/*.html`
-- `.state/*`
-- `.env`
-- `dist/test_bundle*`（历史测试产物）
-
-建议只归档一份新打包产物（`build_bundle.sh` 生成的目录或 `.tar.gz`）。
-
-## 8. 对外发布打包（推荐）
-
-```bash
-./build_bundle.sh --out-dir ./dist/archive_ready_bundle
-```
-
-产物：
-- 目录：`./dist/archive_ready_bundle`
-- 压缩包：`./dist/archive_ready_bundle.tar.gz`
-
-建议只把 `archive_ready_bundle.tar.gz` 发给别人，不要直接发当前工作目录。
-
-## 9. 发版前自测（建议跑一遍）
-
-```bash
-./openclaw_capture_toolkit.sh up
-./openclaw_capture_toolkit.sh clear
-./openclaw_capture_toolkit.sh request --prompt "请只回复: OK" --user "self-check"
-./openclaw_capture_toolkit.sh status
-./openclaw_capture_toolkit.sh export-offline --output ./output/self_check_offline.html
-./openclaw_capture_toolkit.sh down
-```
-
-验收标准：
-- `status` 中 `raw.jsonl lines > 0`
-- 成功导出离线 HTML
+- [使用指南.md](使用指南.md) - 完整功能说明、LCM 阶段速查表、环境变量参考、故障排除
+- [test-fixtures/README.md](test-fixtures/README.md) - 测试数据说明和复现步骤
