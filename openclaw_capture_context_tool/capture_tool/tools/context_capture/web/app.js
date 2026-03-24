@@ -55,6 +55,7 @@ const STAGE_CONFIG = {
   "tool->gateway":  { label: "tool -> openclaw",    css: "stage-tool" },
   "gateway->ui":    { label: "openclaw -> user",    css: "stage-to-user" },
 };
+const ENGINE_ACTION_KINDS = new Set(["assemble", "capture", "ingest", "recall"]);
 
 function classifyDirection(event) {
   const d = event?.direction;
@@ -434,6 +435,140 @@ function renderInternalArrow() {
   el.className = "internal-arrow";
   el.textContent = "\u25BC";
   return el;
+}
+
+function sectionTs(section) {
+  if (!isObj(section)) return null;
+  if (typeof section.started_at === "number") return section.started_at;
+  if (typeof section.ended_at === "number") return section.ended_at;
+  return null;
+}
+
+function sectionWindow(section) {
+  if (!isObj(section)) return null;
+  const start = typeof section.started_at === "number" ? section.started_at : sectionTs(section);
+  const end = typeof section.ended_at === "number" ? section.ended_at : start;
+  if (typeof start !== "number" || typeof end !== "number") return null;
+  return { start, end };
+}
+
+function actionEngineSections(trace) {
+  const sections = Array.isArray(trace?.engine?.sections) ? trace.engine.sections : [];
+  return sections.filter(section => ENGINE_ACTION_KINDS.has(section?.kind) && sectionWindow(section));
+}
+
+function supplementalEngineSections(trace) {
+  const sections = Array.isArray(trace?.engine?.sections) ? trace.engine.sections : [];
+  return sections.filter(section => !ENGINE_ACTION_KINDS.has(section?.kind));
+}
+
+function roundWindow(roundBlocks) {
+  const start = roundBlocks[0]?.events?.[0]?.ts;
+  const lastBlock = roundBlocks[roundBlocks.length - 1];
+  const end = lastBlock?.events?.[lastBlock.events.length - 1]?.ts;
+  if (typeof start !== "number" || typeof end !== "number") return null;
+  return { start, end };
+}
+
+function assignEngineActionsToRounds(rounds, sections) {
+  const assignments = rounds.map(() => []);
+  if (!Array.isArray(rounds) || !Array.isArray(sections) || rounds.length === 0 || sections.length === 0) {
+    return assignments;
+  }
+
+  const windows = rounds.map(roundWindow);
+  for (const section of sections) {
+    const window = sectionWindow(section);
+    if (!window) continue;
+
+    let bestIdx = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < windows.length; i++) {
+      const round = windows[i];
+      if (!round) continue;
+      const overlaps = window.start <= round.end && window.end >= round.start;
+      if (!overlaps) continue;
+      const dist = Math.abs(window.start - round.start);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestIdx = i;
+      }
+    }
+
+    if (bestIdx >= 0) {
+      assignments[bestIdx].push(section);
+    }
+  }
+
+  for (const bucket of assignments) {
+    bucket.sort((a, b) => (sectionTs(a) || 0) - (sectionTs(b) || 0));
+  }
+  return assignments;
+}
+
+function anchorSortKeyForSection(section, roundBlocks) {
+  const kind = section?.kind;
+  const firstModelIndex = roundBlocks.findIndex(block => block?.direction === "gateway->model");
+  let lastModelResponseIndex = -1;
+  for (let i = roundBlocks.length - 1; i >= 0; i--) {
+    if (roundBlocks[i]?.direction === "model->gateway") {
+      lastModelResponseIndex = i;
+      break;
+    }
+  }
+
+  if ((kind === "assemble" || kind === "recall") && firstModelIndex >= 0) {
+    return firstModelIndex - 0.5;
+  }
+  if ((kind === "capture" || kind === "ingest") && lastModelResponseIndex >= 0) {
+    return lastModelResponseIndex + 0.5;
+  }
+
+  const sectionTime = sectionTs(section) || 0;
+  for (let i = 0; i < roundBlocks.length; i++) {
+    const ts = roundBlocks[i]?.events?.[0]?.ts;
+    if (typeof ts === "number" && sectionTime < ts) {
+      return i - 0.5;
+    }
+  }
+  return roundBlocks.length + 0.5;
+}
+
+function buildEngineActionSummary(section, engine) {
+  const items = Array.isArray(section?.items) ? section.items : [];
+  const stats = Array.isArray(section?.stats) ? section.stats : [];
+  const fields = [];
+
+  for (const item of items) {
+    fields.push({
+      label: item?.label || "Item",
+      value: item?.value || "",
+      long: true,
+    });
+  }
+
+  if (Array.isArray(section?.raw_refs) && section.raw_refs.length > 0) {
+    for (const ref of section.raw_refs) {
+      fields.push({
+        label: `原始引用: ${ref?.label || "raw"}`,
+        value: ref?.value || "",
+        long: true,
+      });
+    }
+  }
+
+  return {
+    config: { label: "context engine", css: "stage-engine" },
+    ts: sectionTs(section),
+    tsEnd: typeof section?.ended_at === "number" ? section.ended_at : sectionTs(section),
+    title: section?.title || section?.kind || "Context Engine",
+    lines: [],
+    meta: [
+      engine?.label ? `engine: ${engine.label}` : "",
+      ...stats.map(stat => `${stat.label}: ${stat.value}`),
+    ].filter(Boolean),
+    fields,
+  };
 }
 
 // --------------- LCM diagnostics rendering ---------------
@@ -1056,7 +1191,7 @@ function renderLcmAsCard(entry) {
   return card;
 }
 
-function renderRound(roundBlocks, roundIndex, traceIdx) {
+function renderRound(roundBlocks, roundIndex, traceIdx, engineActions = [], engine = null) {
   const container = document.createElement("section");
   container.className = "round";
 
@@ -1090,15 +1225,15 @@ function renderRound(roundBlocks, roundIndex, traceIdx) {
     }
   }
 
-  const timeline = [];
+  const orderedBlocks = [];
 
   if (userBlock) {
-    timeline.push({ type: "http", block: userBlock });
+    orderedBlocks.push(userBlock);
   }
 
   for (const block of allBlocks) {
     if (block.direction === "gateway->ui") continue;
-    timeline.push({ type: "http", block });
+    orderedBlocks.push(block);
   }
 
   let outputBlock = roundBlocks[roundBlocks.length - 1]?.direction === "gateway->ui"
@@ -1116,13 +1251,36 @@ function renderRound(roundBlocks, roundIndex, traceIdx) {
     }
   }
   if (outputBlock) {
-    timeline.push({ type: "http", block: outputBlock });
+    orderedBlocks.push(outputBlock);
   }
+
+  const timeline = orderedBlocks.map((block, index) => ({
+    type: "http",
+    block,
+    sortKey: index,
+  }));
+
+  for (const section of engineActions) {
+    timeline.push({
+      type: "engine",
+      section,
+      sortKey: anchorSortKeyForSection(section, orderedBlocks),
+    });
+  }
+
+  timeline.sort((a, b) => {
+    if (a.sortKey !== b.sortKey) return a.sortKey - b.sortKey;
+    return 0;
+  });
 
   for (let i = 0; i < timeline.length; i++) {
     const item = timeline[i];
-    const summary = buildBlockSummary(item.block);
-    const isMiddle = item.block.direction !== "user->gateway" && item.block.direction !== "gateway->ui";
+    const summary = item.type === "engine"
+      ? buildEngineActionSummary(item.section, engine)
+      : buildBlockSummary(item.block);
+    const isMiddle = item.type === "engine"
+      ? true
+      : item.block.direction !== "user->gateway" && item.block.direction !== "gateway->ui";
     container.appendChild(renderBlockCard(summary, isMiddle));
     if (i < timeline.length - 1) {
       container.appendChild(renderInternalArrow());
@@ -1332,8 +1490,9 @@ function renderSingleTrace(container, trace, roundOffset, traceIdx) {
   const blocks = groupIntoBlocks(events).filter(block => !blockIsHeartbeatInternal(block));
   if (blocks.length === 0) return 0;
   const rounds = groupBlocksIntoRounds(blocks);
+  const engineActionsByRound = assignEngineActionsToRounds(rounds, actionEngineSections(trace));
   for (let i = 0; i < rounds.length; i++) {
-    container.appendChild(renderRound(rounds[i], roundOffset + i, traceIdx));
+    container.appendChild(renderRound(rounds[i], roundOffset + i, traceIdx, engineActionsByRound[i], trace?.engine));
   }
   return rounds.length;
 }
@@ -1400,7 +1559,7 @@ function renderEngineDiagnostics() {
   header.className = "engine-panel-header";
   const title = document.createElement("h3");
   title.className = "engine-panel-title";
-  title.textContent = `Context Engine 诊断 · ${engineBadgeText(engine.id, engine.label)}`;
+  title.textContent = `Context Engine 补充信息 · ${engineBadgeText(engine.id, engine.label)}`;
   header.appendChild(title);
   const summary = document.createElement("div");
   summary.className = "engine-summary";
@@ -1416,13 +1575,13 @@ function renderEngineDiagnostics() {
   header.appendChild(summary);
   container.appendChild(header);
 
-  const sections = Array.isArray(engine.sections) ? engine.sections : [];
+  const sections = supplementalEngineSections(trace);
   if (sections.length === 0) {
     const empty = document.createElement("div");
     empty.className = "panel-empty";
     empty.textContent = engine.id === "unknown"
       ? "当前 trace 没有匹配到专属 Context Engine 诊断，仍可查看上方通用链路。"
-      : "当前 trace 已识别到 Context Engine，但没有捕获到可展示的专属诊断。";
+      : "动作类 Context Engine 诊断已并入上方主时序，当前没有额外补充信息。";
     container.appendChild(empty);
     return;
   }

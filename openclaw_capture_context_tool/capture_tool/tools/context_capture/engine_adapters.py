@@ -62,7 +62,7 @@ LCM_SECTION_SPECS = (
             "compact_result",
         },
     ),
-    ("capture", "capture", "After Turn", {"afterTurn_entry"}),
+    ("capture", "capture", "afterTurn", {"afterTurn_entry"}),
     ("ingest", "ingest", "Ingest", {"ingest"}),
 )
 
