@@ -964,12 +964,69 @@ function renderAssembleMsgList(msgs) {
       : `[${role}] ${fmt(m.tokens)} token`;
     const textEl = document.createElement("span");
     textEl.className = "stage-field-value";
-    textEl.textContent = m.preview || m.content || "(empty)";
+    textEl.textContent = assembleMessagePreview(m, msgs) || "(empty)";
     row.appendChild(labelEl);
     row.appendChild(textEl);
     list.appendChild(row);
   }
   return list;
+}
+
+function basenamePath(path) {
+  if (typeof path !== "string" || !path) return "";
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || path;
+}
+
+function summarizeToolCallPreview(text) {
+  if (typeof text !== "string" || !text.trim()) return "";
+  try {
+    const parsed = JSON.parse(text);
+    const blocks = Array.isArray(parsed) ? parsed : [parsed];
+    const toolCall = blocks.find(block => isObj(block) && (block.type === "toolCall" || block.type === "tool_use"));
+    if (!isObj(toolCall)) return "";
+    const toolName = toolCall.name || "unknown";
+    const args = isObj(toolCall.arguments) ? toolCall.arguments : (isObj(toolCall.input) ? toolCall.input : {});
+    if (typeof args.path === "string" && args.path) {
+      return `toolCall: ${toolName}(${basenamePath(args.path)})`;
+    }
+    if (typeof args.command === "string" && args.command) {
+      return `toolCall: ${toolName}(${args.command})`;
+    }
+    return `toolCall: ${toolName}`;
+  } catch {
+    return "";
+  }
+}
+
+function inferReadTargetFromToolResultPreview(text) {
+  if (typeof text !== "string" || !text.trim()) return "";
+  const heading = text.match(/^#\s+([^\n#]+)$/m);
+  if (!heading) return "";
+  const label = heading[1].trim();
+  const fileish = label.match(/^([A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+)/);
+  return fileish ? fileish[1] : label;
+}
+
+function assembleMessagePreview(message, allMessages) {
+  const direct = message?.preview || message?.content || "";
+  const summarized = summarizeToolCallPreview(direct);
+  if (summarized) return summarized;
+  if (direct) return direct;
+
+  if (message?.role !== "assistant" || !Array.isArray(allMessages)) {
+    return "";
+  }
+
+  const idx = allMessages.indexOf(message);
+  if (idx < 0) return "";
+  const next = allMessages[idx + 1];
+  if (next?.role === "toolResult" && typeof next.preview === "string" && next.preview) {
+    const readTarget = inferReadTargetFromToolResultPreview(next.preview);
+    if (readTarget) return `toolCall: read(${readTarget})`;
+    return "toolCall";
+  }
+  return "";
 }
 
 function renderMessageDetails(summaryText, msgs) {
