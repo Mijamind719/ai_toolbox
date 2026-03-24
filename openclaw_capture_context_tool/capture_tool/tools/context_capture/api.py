@@ -27,6 +27,10 @@ TOOL_START_PATTERN = re.compile(
 TOOL_END_PATTERN = re.compile(
     r"embedded run tool end: runId=(?P<run_id>[^ ]+) tool=(?P<tool>[^ ]+) toolCallId=(?P<tool_call_id>[^ ]+)"
 )
+HEARTBEAT_PREVIEW_MARKERS = (
+    "Read HEARTBEAT.md if it exists (workspace context).",
+    "Read HEARTBEAT.md if it exists",
+)
 
 
 def _gateway_log_path(data_dir: Path) -> Path | None:
@@ -460,17 +464,23 @@ def _event_sort_key(event: Any) -> tuple[int, int]:
     return (1, 0)
 
 
+def _is_heartbeat_internal_preview(preview_text: str) -> bool:
+    return any(marker in preview_text for marker in HEARTBEAT_PREVIEW_MARKERS)
+
+
 def _trace_detail(trace_id: str, trace: dict[str, Any], *, diagnostics_context: dict[str, Any]) -> dict[str, Any]:
     events = trace.get("events", [])
     ordered_events = _aggregate_trace_events(events)
     start_ts = events[0].ts if events else None
     end_ts = events[-1].ts if events else None
+    preview_text = extract_trace_preview(trace)
     engine = build_engine_payload(trace, context=diagnostics_context)
     return {
         "trace_id": trace_id,
         "start_ts": start_ts,
         "end_ts": end_ts,
-        "preview_text": extract_trace_preview(trace),
+        "preview_text": preview_text,
+        "is_heartbeat_internal": _is_heartbeat_internal_preview(preview_text),
         "correlation_confidence": trace.get("correlation_confidence"),
         "completeness": trace.get("completeness"),
         "missing_reasons": trace.get("missing_reasons"),
@@ -487,6 +497,7 @@ def _timeline_item(trace_id: str, trace: dict[str, Any], *, diagnostics_context:
     events = trace.get("events", [])
     start_ts = events[0].ts if events else None
     end_ts = events[-1].ts if events else None
+    preview_text = extract_trace_preview(trace)
     engine = build_engine_payload(trace, context=diagnostics_context)
 
     return {
@@ -494,7 +505,8 @@ def _timeline_item(trace_id: str, trace: dict[str, Any], *, diagnostics_context:
         "event_count": len(events),
         "start_ts": start_ts,
         "end_ts": end_ts,
-        "preview_text": extract_trace_preview(trace),
+        "preview_text": preview_text,
+        "is_heartbeat_internal": _is_heartbeat_internal_preview(preview_text),
         "correlation_confidence": trace.get("correlation_confidence"),
         "completeness": trace.get("completeness"),
         "missing_reasons": trace.get("missing_reasons"),

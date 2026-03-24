@@ -97,6 +97,10 @@ function extractResponseText(payload) {
   if (typeof payload.response_text === "string" && payload.response_text) return payload.response_text;
   if (typeof payload.text === "string" && payload.text) return payload.text;
   if (typeof payload.merged_text === "string" && payload.merged_text) return payload.merged_text;
+  if (isObj(payload.assistant_message)) {
+    const assistantText = extractTextFromContent(payload.assistant_message.content);
+    if (assistantText) return assistantText;
+  }
   const output = payload.output;
   if (Array.isArray(output)) {
     for (const item of output) {
@@ -119,8 +123,10 @@ function extractUsage(payload) {
   if (!isObj(u)) return null;
   const input = u.input_tokens || u.inputTokens || u.input || 0;
   const output = u.output_tokens || u.outputTokens || u.output || 0;
+  const cacheRead = u.cache_read_tokens || u.cacheReadTokens || u.cache_read || u.cacheRead || 0;
+  const cacheWrite = u.cache_write_tokens || u.cacheWriteTokens || u.cache_write || u.cacheWrite || 0;
   const total = u.total_tokens || u.totalTokens || u.total || (input + output);
-  return { input, output, total };
+  return { input, output, cacheRead, cacheWrite, total };
 }
 
 function extractToolCalls(payload) {
@@ -287,6 +293,8 @@ function buildBlockSummary(block) {
     if (merged.usage) {
       result.meta.push(`input: ${fmt(merged.usage.input)}`);
       result.meta.push(`output: ${fmt(merged.usage.output)}`);
+      result.meta.push(`cacheRead: ${fmt(merged.usage.cacheRead)}`);
+      result.meta.push(`cacheWrite: ${fmt(merged.usage.cacheWrite)}`);
       result.meta.push(`total: ${fmt(merged.usage.total)}`);
     }
     if (typeof ts === "number" && typeof tsEnd === "number") {
@@ -1123,13 +1131,76 @@ function isLcmInternalTrace(trace) {
   return false;
 }
 
+const HEARTBEAT_MARKERS = [
+  "Read HEARTBEAT.md if it exists (workspace context).",
+  "Read HEARTBEAT.md if it exists",
+];
+
+function textHasHeartbeatMarker(text) {
+  if (typeof text !== "string" || !text) return false;
+  return HEARTBEAT_MARKERS.some(marker => text.includes(marker));
+}
+
+function extractHeartbeatCandidateTexts(payload) {
+  const texts = [];
+  if (!isObj(payload)) return texts;
+
+  if (typeof payload.input === "string" && payload.input) texts.push(payload.input);
+  if (typeof payload.prompt === "string" && payload.prompt) texts.push(payload.prompt);
+  if (typeof payload.text === "string" && payload.text) texts.push(payload.text);
+
+  if (Array.isArray(payload.messages)) {
+    for (const msg of payload.messages) {
+      if (!isObj(msg)) continue;
+      if (msg.role !== "user") continue;
+      const text = extractTextFromContent(msg.content);
+      if (text) texts.push(text);
+    }
+  }
+
+  return texts;
+}
+
+function payloadIsHeartbeatRequest(payload) {
+  const texts = extractHeartbeatCandidateTexts(payload);
+  if (texts.length === 0) return false;
+  return texts.every(text => textHasHeartbeatMarker(text));
+}
+
+function eventIsHeartbeatInternal(event) {
+  if (!isObj(event)) return false;
+  const direction = event.direction;
+  if (direction === "gateway->model") {
+    return payloadIsHeartbeatRequest(event.payload_full);
+  }
+  return false;
+}
+
+function blockIsHeartbeatInternal(block) {
+  if (!isObj(block) || !Array.isArray(block.events) || block.events.length === 0) return false;
+  return block.events.every(event => eventIsHeartbeatInternal(event));
+}
+
 function buildVisibleTimeline(timeline) {
   const ordered = [...timeline].sort((a, b) => {
     const tsA = typeof a?.start_ts === "number" ? a.start_ts : 0;
     const tsB = typeof b?.start_ts === "number" ? b.start_ts : 0;
     return tsB - tsA;
   });
-  if (ordered.length > 0) return { list: ordered, note: `共 ${ordered.length} 条会话` };
+  const visible = ordered.filter(item => item?.is_heartbeat_internal !== true);
+  if (visible.length > 0) {
+    const hiddenCount = ordered.length - visible.length;
+    const note = hiddenCount > 0
+      ? `共 ${visible.length} 条会话，已隐藏 ${hiddenCount} 条 HEARTBEAT 内部轮次`
+      : `共 ${visible.length} 条会话`;
+    return { list: visible, note };
+  }
+  if (ordered.length > 0) {
+    return {
+      list: [],
+      note: `共 ${ordered.length} 条会话，已隐藏 ${ordered.length} 条 HEARTBEAT 内部轮次`,
+    };
+  }
   return { list: [], note: "暂无会话数据。" };
 }
 
@@ -1231,7 +1302,8 @@ function mergeAdjacentTraces(traces) {
 function renderSingleTrace(container, trace, roundOffset, traceIdx) {
   const events = Array.isArray(trace?.common?.events) ? trace.common.events : trace?.events;
   if (!isObj(trace) || !Array.isArray(events) || events.length === 0) return 0;
-  const blocks = groupIntoBlocks(events);
+  const blocks = groupIntoBlocks(events).filter(block => !blockIsHeartbeatInternal(block));
+  if (blocks.length === 0) return 0;
   const rounds = groupBlocksIntoRounds(blocks);
   for (let i = 0; i < rounds.length; i++) {
     container.appendChild(renderRound(rounds[i], roundOffset + i, traceIdx));
@@ -1282,7 +1354,7 @@ function renderEngineDiagnostics() {
   if (state.showAllMode) {
     const empty = document.createElement("div");
     empty.className = "panel-empty";
-    empty.textContent = "全量视图下不展示 engine 专属诊断，请选择单条 trace 查看。";
+    empty.textContent = "全量视图下不展示 Context Engine 专属诊断，请选择单条 trace 查看。";
     container.appendChild(empty);
     return;
   }
@@ -1292,7 +1364,7 @@ function renderEngineDiagnostics() {
   if (!isObj(trace) || !isObj(engine)) {
     const empty = document.createElement("div");
     empty.className = "panel-empty";
-    empty.textContent = "请选择左侧会话查看 engine 诊断。";
+    empty.textContent = "请选择左侧会话查看 Context Engine 诊断。";
     container.appendChild(empty);
     return;
   }
@@ -1301,7 +1373,7 @@ function renderEngineDiagnostics() {
   header.className = "engine-panel-header";
   const title = document.createElement("h3");
   title.className = "engine-panel-title";
-  title.textContent = `Engine 诊断 · ${engineBadgeText(engine.id, engine.label)}`;
+  title.textContent = `Context Engine 诊断 · ${engineBadgeText(engine.id, engine.label)}`;
   header.appendChild(title);
   const summary = document.createElement("div");
   summary.className = "engine-summary";
@@ -1322,8 +1394,8 @@ function renderEngineDiagnostics() {
     const empty = document.createElement("div");
     empty.className = "panel-empty";
     empty.textContent = engine.id === "unknown"
-      ? "当前 trace 没有匹配到专属 context engine 诊断，仍可查看上方通用链路。"
-      : "当前 trace 已识别到 engine，但没有捕获到可展示的专属诊断。";
+      ? "当前 trace 没有匹配到专属 Context Engine 诊断，仍可查看上方通用链路。"
+      : "当前 trace 已识别到 Context Engine，但没有捕获到可展示的专属诊断。";
     container.appendChild(empty);
     return;
   }
@@ -1496,11 +1568,11 @@ async function showAllTraces() {
     metaContainer.replaceChildren();
     const pill = document.createElement("span");
     pill.className = "meta-pill";
-    pill.textContent = `全量视图: ${state.visibleTimeline.length} 条 trace`;
+    pill.textContent = `全量视图: ${state.timeline.length} 条 trace`;
     metaContainer.appendChild(pill);
   }
 
-  const sorted = [...state.visibleTimeline].sort((a, b) => {
+  const sorted = [...state.timeline].sort((a, b) => {
     const tsA = typeof a?.start_ts === "number" ? a.start_ts : 0;
     const tsB = typeof b?.start_ts === "number" ? b.start_ts : 0;
     return tsA - tsB;
