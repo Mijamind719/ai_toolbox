@@ -360,6 +360,29 @@ function buildBlockSummary(block) {
 
 // --------------- rendering ---------------
 
+function createStageToggle(labelText) {
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "stage-toggle";
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.setAttribute("aria-label", `展开 ${labelText}`);
+  toggle.textContent = "▸";
+  return toggle;
+}
+
+function attachStageToggleBehavior(labelEl, body, labelText) {
+  const toggle = createStageToggle(labelText);
+  labelEl.appendChild(toggle);
+  body.hidden = true;
+  toggle.addEventListener("click", () => {
+    const expanded = body.hidden;
+    body.hidden = !expanded;
+    toggle.textContent = expanded ? "▾" : "▸";
+    toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+    toggle.setAttribute("aria-label", expanded ? `折叠 ${labelText}` : `展开 ${labelText}`);
+  });
+}
+
 function renderBlockCard(summary, compact) {
   const { config, ts, title, lines, meta, fields } = summary;
   const card = document.createElement("div");
@@ -369,9 +392,9 @@ function renderBlockCard(summary, compact) {
   header.className = "stage-header";
   const labelEl = document.createElement("span");
   labelEl.className = "stage-label";
-  const dot = document.createElement("span");
-  dot.className = "stage-dot";
-  labelEl.appendChild(dot);
+  const body = document.createElement("div");
+  body.className = "stage-body";
+  attachStageToggleBehavior(labelEl, body, config?.label || "详情");
   labelEl.appendChild(document.createTextNode(config.label));
   const timeEl = document.createElement("span");
   timeEl.className = "stage-time";
@@ -379,9 +402,6 @@ function renderBlockCard(summary, compact) {
   header.appendChild(labelEl);
   header.appendChild(timeEl);
   card.appendChild(header);
-
-  const body = document.createElement("div");
-  body.className = "stage-body";
 
   const titleEl = document.createElement("pre");
   titleEl.className = "stage-text";
@@ -1071,9 +1091,9 @@ function renderAssembleCard(assembleEntries, engine) {
   header.className = "stage-header";
   const label = document.createElement("span");
   label.className = "stage-label";
-  const dot = document.createElement("span");
-  dot.className = "stage-dot";
-  label.appendChild(dot);
+  const body = document.createElement("div");
+  body.className = "stage-body";
+  attachStageToggleBehavior(label, body, "context engine");
   label.appendChild(document.createTextNode("context engine"));
   const timeLabel = document.createElement("span");
   timeLabel.className = "stage-time";
@@ -1082,8 +1102,6 @@ function renderAssembleCard(assembleEntries, engine) {
   header.appendChild(timeLabel);
   card.appendChild(header);
 
-  const body = document.createElement("div");
-  body.className = "stage-body";
   const titleEl = document.createElement("pre");
   titleEl.className = "stage-text";
   titleEl.textContent = "Context Assemble";
