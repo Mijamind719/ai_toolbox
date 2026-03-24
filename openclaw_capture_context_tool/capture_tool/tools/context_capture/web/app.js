@@ -571,6 +571,21 @@ function buildEngineActionSummary(section, engine) {
   };
 }
 
+function renderEngineActionCard(section, engine, compact) {
+  if (section?.kind === "assemble") {
+    const entries = parseSectionRawEntries(section);
+    const hasAssembleStages = entries.some(entry => {
+      const stage = entry?.stage;
+      return stage === "assemble_input" || stage === "context_assemble" || stage === "assemble_output";
+    });
+    if (hasAssembleStages) {
+      return renderAssembleCard(entries, engine);
+    }
+  }
+
+  return renderBlockCard(buildEngineActionSummary(section, engine), compact);
+}
+
 // --------------- LCM diagnostics rendering ---------------
 
 const LCM_STAGE_LABELS = {
@@ -902,7 +917,7 @@ function renderLcmStep(entry) {
       roleEl.textContent = m.role || "?";
       const tokEl = document.createElement("span");
       tokEl.className = "lcm-msg-tokens";
-      tokEl.textContent = `${fmt(m.tokens)} tok`;
+      tokEl.textContent = `${fmt(m.tokens)} token`;
       const textEl = document.createElement("div");
       textEl.className = "lcm-msg-text";
       textEl.textContent = m.preview || "(empty)";
@@ -936,44 +951,101 @@ function renderLcmStep(entry) {
 
 function renderAssembleMsgList(msgs) {
   const list = document.createElement("div");
-  list.className = "lcm-messages-list";
+  list.className = "stage-fields";
   for (const m of msgs) {
-    const el = document.createElement("div");
+    const row = document.createElement("div");
+    row.className = "stage-field-row stage-field-long";
     const kind = m.kind || "raw";
-    el.className = "lcm-msg lcm-msg-" + (m.role || "unknown") + (kind === "summary" ? " lcm-msg-summary" : "");
-    const roleEl = document.createElement("span");
-    roleEl.className = "lcm-msg-role";
-    roleEl.textContent = (kind === "summary" ? "\u2702 " : "") + (m.role || "?");
-    const tokEl = document.createElement("span");
-    tokEl.className = "lcm-msg-tokens";
-    tokEl.textContent = `${fmt(m.tokens)} tok` + (kind === "summary" ? " [\u6458\u8981]" : "");
-    const textEl = document.createElement("div");
-    textEl.className = "lcm-msg-text";
+    const labelEl = document.createElement("span");
+    labelEl.className = "stage-field-label";
+    const role = m.role || "?";
+    labelEl.textContent = kind === "summary"
+      ? `[summary:${role}] ${fmt(m.tokens)} token`
+      : `[${role}] ${fmt(m.tokens)} token`;
+    const textEl = document.createElement("span");
+    textEl.className = "stage-field-value";
     textEl.textContent = m.preview || m.content || "(empty)";
-    el.appendChild(roleEl);
-    el.appendChild(tokEl);
-    el.appendChild(textEl);
-    list.appendChild(el);
+    row.appendChild(labelEl);
+    row.appendChild(textEl);
+    list.appendChild(row);
   }
   return list;
 }
 
-function renderAssembleCard(assembleEntries) {
+function renderMessageDetails(summaryText, msgs) {
+  const details = document.createElement("details");
+  details.className = "stage-expand";
+  const summary = document.createElement("summary");
+  summary.textContent = summaryText;
+  details.appendChild(summary);
+  details.appendChild(renderAssembleMsgList(msgs));
+  return details;
+}
+
+function parseSectionRawEntries(section) {
+  const refs = Array.isArray(section?.raw_refs) ? section.raw_refs : [];
+  const entries = [];
+  for (const ref of refs) {
+    if (!isObj(ref) || typeof ref.value !== "string") continue;
+    try {
+      const parsed = JSON.parse(ref.value);
+      if (isObj(parsed)) entries.push(parsed);
+    } catch {
+      // Ignore malformed raw refs and keep rendering the rest of the card.
+    }
+  }
+  return entries;
+}
+
+function renderAssembleSection(titleText) {
+  const section = document.createElement("section");
+  section.className = "lcm-messages-section";
+  const title = document.createElement("div");
+  title.className = "lcm-section-title";
+  title.textContent = titleText;
+  section.appendChild(title);
+  return section;
+}
+
+function renderAssembleCard(assembleEntries, engine) {
   const card = document.createElement("div");
-  card.className = "stage-card stage-lcm";
+  card.className = "stage-card stage-engine";
   const header = document.createElement("div");
-  header.className = "lcm-step-header";
+  header.className = "stage-header";
   const label = document.createElement("span");
-  label.className = "lcm-step-stage";
-  label.textContent = "Assemble \u4e0a\u4e0b\u6587\u7ec4\u88c5";
+  label.className = "stage-label";
+  const dot = document.createElement("span");
+  dot.className = "stage-dot";
+  label.appendChild(dot);
+  label.appendChild(document.createTextNode("context engine"));
   const timeLabel = document.createElement("span");
-  timeLabel.className = "lcm-step-time";
+  timeLabel.className = "stage-time";
   timeLabel.textContent = formatTs(assembleEntries[0]?.ts);
   header.appendChild(label);
   header.appendChild(timeLabel);
   card.appendChild(header);
+
   const body = document.createElement("div");
-  body.className = "lcm-step-body";
+  body.className = "stage-body";
+  const titleEl = document.createElement("pre");
+  titleEl.className = "stage-text";
+  titleEl.textContent = "Context Assemble";
+  body.appendChild(titleEl);
+  const metaRow = document.createElement("div");
+  metaRow.className = "stage-meta-row";
+  for (const tag of [
+    engine?.label ? `engine: ${engine.label}` : "",
+    `诊断条目: ${assembleEntries.length}`,
+  ].filter(Boolean)) {
+    const span = document.createElement("span");
+    span.className = "stage-meta-tag";
+    span.textContent = tag;
+    metaRow.appendChild(span);
+  }
+  body.appendChild(metaRow);
+
+  const lcmBody = document.createElement("div");
+  lcmBody.className = "lcm-step-body";
 
   const inputEntry = assembleEntries.find(e => e.stage === "assemble_input");
   const contextEntry = assembleEntries.find(e => e.stage === "context_assemble");
@@ -1003,56 +1075,100 @@ function renderAssembleCard(assembleEntries) {
     const row = document.createElement("div");
     row.className = "lcm-kv";
     const rl = document.createElement("span"); rl.className = "lcm-kv-label"; rl.textContent = k;
-    const rv = document.createElement("span"); rv.className = "lcm-kv-value" + (k.includes("\u8282\u7701") ? " lcm-saving" : ""); rv.textContent = v;
+    const rv = document.createElement("span"); rv.className = "lcm-kv-inline" + (k.includes("\u8282\u7701") ? " lcm-saving" : ""); rv.textContent = v;
     row.appendChild(rl); row.appendChild(rv); sumPanel.appendChild(row);
   }
   const note = document.createElement("div");
   note.className = "lcm-assemble-note";
   note.style.whiteSpace = "pre-wrap";
-  note.textContent = "\u2139 tokens \u4e3a engine \u5b58\u50a8\u7684 content \u8ba1\u6570\uff08Math.ceil(content.length/4)\uff09\uff0c\u6d88\u606f\u5217\u8868\u4e2d\u7684 tok \u4e3a\u7eaf\u6587\u672c\u7c97\u4f30\uff0c\u53ef\u80fd\u504f\u5c0f";
+  note.textContent = "\u2139 tokens \u4e3a engine \u5b58\u50a8\u7684 content \u8ba1\u6570\uff08Math.ceil(content.length/4)\uff09\uff0c\u6d88\u606f\u5217\u8868\u4e2d\u7684 token \u4e3a\u7eaf\u6587\u672c\u7c97\u4f30\uff0c\u53ef\u80fd\u504f\u5c0f";
   sumPanel.appendChild(note);
-  body.appendChild(sumPanel);
+  lcmBody.appendChild(sumPanel);
+
+  const evaluateEntry = assembleEntries.find(e => e.stage === "compaction_evaluate");
+  if (evaluateEntry) {
+    const d = evaluateEntry.data || {};
+    const section = renderAssembleSection("压缩决策");
+    const kvs = [
+      ["当前 tokens", fmt(d.currentTokens)],
+      ["tokenBudget", fmt(d.tokenBudget)],
+      ["contextThreshold", d.contextThreshold ?? ""],
+      ["阈值", fmt(d.threshold)],
+      ["需要压缩", d.shouldCompact ? "是" : "否"],
+    ];
+    if (d.reason && d.reason !== "none") kvs.push(["原因", d.reason]);
+    for (const [k, v] of kvs) {
+      const row = document.createElement("div");
+      row.className = "lcm-kv";
+      const rl = document.createElement("span");
+      rl.className = "lcm-kv-label";
+      rl.textContent = k;
+      const rv = document.createElement("span");
+      rv.className = "lcm-kv-inline";
+      rv.textContent = String(v ?? "");
+      row.appendChild(rl);
+      row.appendChild(rv);
+      section.appendChild(row);
+    }
+    lcmBody.appendChild(section);
+  }
 
   if (inputEntry) {
     const d = inputEntry.data || {};
-    const section = document.createElement("details");
-    section.className = "lcm-messages-section";
-    const sum = document.createElement("summary");
+    const section = renderAssembleSection("原始消息输入");
     const inputMsgs = d.messages || [];
     const inputMsgTokens = inputMsgs.reduce((s, m) => s + (m.tokens || 0), 0);
-    sum.textContent = "\u{1f4e5} \u5386\u53f2\u4e0a\u4e0b\u6587\u6d88\u606f\uff08" + (d.messagesCount||0) + " \u6761\uff0c" + fmt(inputMsgTokens) + " tok\uff09";
-    section.appendChild(sum);
+    const intro = document.createElement("div");
+    intro.className = "lcm-kv";
+    const introLabel = document.createElement("span");
+    introLabel.className = "lcm-kv-label";
+    introLabel.textContent = "消息数";
+    const introValue = document.createElement("span");
+    introValue.className = "lcm-kv-inline";
+    introValue.textContent = `${d.messagesCount || 0} 条，${fmt(inputMsgTokens)} token`;
+    intro.appendChild(introLabel);
+    intro.appendChild(introValue);
+    section.appendChild(intro);
     const meta = document.createElement("div");
     meta.className = "lcm-kv";
     const estRow = document.createElement("div"); estRow.className = "lcm-kv";
     const estL = document.createElement("span"); estL.className = "lcm-kv-label"; estL.textContent = "inputTokenEstimate";
-    const estV = document.createElement("span"); estV.className = "lcm-kv-value"; estV.textContent = fmt(d.inputTokenEstimate) + " (含开销)";
+    const estV = document.createElement("span"); estV.className = "lcm-kv-inline"; estV.textContent = fmt(d.inputTokenEstimate) + " (含开销)";
     estRow.appendChild(estL); estRow.appendChild(estV); section.appendChild(estRow);
     const ml = document.createElement("span"); ml.className = "lcm-kv-label"; ml.textContent = "tokenBudget";
-    const mv = document.createElement("span"); mv.className = "lcm-kv-value"; mv.textContent = fmt(d.tokenBudget);
+    const mv = document.createElement("span"); mv.className = "lcm-kv-inline"; mv.textContent = fmt(d.tokenBudget);
     meta.appendChild(ml); meta.appendChild(mv);
     section.appendChild(meta);
     if (d.hasSummaryItems) {
       const m2 = document.createElement("div"); m2.className = "lcm-kv";
       const m2l = document.createElement("span"); m2l.className = "lcm-kv-label"; m2l.textContent = "\u542b\u6458\u8981";
-      const m2v = document.createElement("span"); m2v.className = "lcm-kv-value"; m2v.textContent = "\u662f";
+      const m2v = document.createElement("span"); m2v.className = "lcm-kv-inline"; m2v.textContent = "\u662f";
       m2.appendChild(m2l); m2.appendChild(m2v); section.appendChild(m2);
     }
     const msgs = d.messages || [];
-    if (msgs.length > 0) section.appendChild(renderAssembleMsgList(msgs));
-    body.appendChild(section);
+    if (msgs.length > 0) {
+      section.appendChild(renderMessageDetails(`展开详情 (${msgs.length} 条消息)`, msgs));
+    }
+    lcmBody.appendChild(section);
   }
 
   if (contextEntry) {
     const d = contextEntry.data || {};
-    const section = document.createElement("details");
-    section.className = "lcm-messages-section";
+    const section = renderAssembleSection("上下文组装");
     const sc = d.summaryCount||0, rc = d.rawMessageCount||0, fc = d.freshTailCount||0;
-    const sum = document.createElement("summary");
     const asmMsgs = d.assembledMessages || [];
     const asmTokSum = asmMsgs.reduce((s, m) => s + (m.tokens || 0), 0);
-    sum.textContent = "\u{1f527} LCM \u7ec4\u88c5\u7ed3\u679c\uff08raw=" + rc + ", summaries=" + sc + ", freshTail=" + fc + ", " + fmt(asmTokSum) + " tok\uff09";
-    section.appendChild(sum);
+    const intro = document.createElement("div");
+    intro.className = "lcm-kv";
+    const introLabel = document.createElement("span");
+    introLabel.className = "lcm-kv-label";
+    introLabel.textContent = "组装结果";
+    const introValue = document.createElement("span");
+    introValue.className = "lcm-kv-inline";
+    introValue.textContent = `raw=${rc}, summaries=${sc}, freshTail=${fc}, ${fmt(asmTokSum)} token`;
+    intro.appendChild(introLabel);
+    intro.appendChild(introValue);
+    section.appendChild(intro);
     const kvs = [
       ["\u539f\u59cb\u6d88\u606f", rc], ["\u6458\u8981\u6761\u6570", sc],
       ["\u4fdd\u62a4\u5c3e\u90e8", fc], ["\u5c3e\u90e8 tokens", fmt(d.tailTokens)],
@@ -1061,7 +1177,7 @@ function renderAssembleCard(assembleEntries) {
     for (const [k, v] of kvs) {
       const row = document.createElement("div"); row.className = "lcm-kv";
       const rl = document.createElement("span"); rl.className = "lcm-kv-label"; rl.textContent = k;
-      const rv = document.createElement("span"); rv.className = "lcm-kv-value"; rv.textContent = String(v??"");
+      const rv = document.createElement("span"); rv.className = "lcm-kv-inline"; rv.textContent = String(v??"");
       row.appendChild(rl); row.appendChild(rv); section.appendChild(row);
     }
     if (d.systemPromptAddition) {
@@ -1078,24 +1194,33 @@ function renderAssembleCard(assembleEntries) {
       section.appendChild(spRow);
     }
     const asm = d.assembledMessages || [];
-    if (asm.length > 0) section.appendChild(renderAssembleMsgList(asm));
-    body.appendChild(section);
+    if (asm.length > 0) {
+      section.appendChild(renderMessageDetails(`展开详情 (${asm.length} 条消息)`, asm));
+    }
+    lcmBody.appendChild(section);
   }
 
   if (outputEntry) {
     const d = outputEntry.data || {};
-    const section = document.createElement("details");
-    section.className = "lcm-messages-section";
-    const sum = document.createElement("summary");
+    const section = renderAssembleSection("最终输出");
     const sysPrompt = d.systemPromptAddition;
     const outMsgs = d.messages || [];
     const outTokSum = outMsgs.reduce((s, m) => s + (m.tokens || 0), 0);
-    sum.textContent = "\u{1f4e4} \u7ec4\u88c5\u8f93\u51fa\uff08" + (d.outputMessagesCount||0) + " \u6761\uff0c" + fmt(outTokSum) + " tok\uff09";
-    section.appendChild(sum);
+    const intro = document.createElement("div");
+    intro.className = "lcm-kv";
+    const introLabel = document.createElement("span");
+    introLabel.className = "lcm-kv-label";
+    introLabel.textContent = "输出消息";
+    const introValue = document.createElement("span");
+    introValue.className = "lcm-kv-inline";
+    introValue.textContent = `${d.outputMessagesCount || 0} 条，${fmt(outTokSum)} token`;
+    intro.appendChild(introLabel);
+    intro.appendChild(introValue);
+    section.appendChild(intro);
     if (d.estimatedTokens) {
       const etRow = document.createElement("div"); etRow.className = "lcm-kv";
       const etL = document.createElement("span"); etL.className = "lcm-kv-label"; etL.textContent = "estimatedTokens";
-      const etV = document.createElement("span"); etV.className = "lcm-kv-value"; etV.textContent = fmt(d.estimatedTokens) + " (\u6570 content JSON)";
+      const etV = document.createElement("span"); etV.className = "lcm-kv-inline"; etV.textContent = fmt(d.estimatedTokens) + " (\u6570 content JSON)";
       etRow.appendChild(etL); etRow.appendChild(etV); section.appendChild(etRow);
     }
     const saved = d.tokensSaved || 0;
@@ -1119,10 +1244,13 @@ function renderAssembleCard(assembleEntries) {
       section.appendChild(spRow);
     }
     const msgs = d.messages || [];
-    if (msgs.length > 0) section.appendChild(renderAssembleMsgList(msgs));
-    body.appendChild(section);
+    if (msgs.length > 0) {
+      section.appendChild(renderMessageDetails(`展开详情 (${msgs.length} 条消息)`, msgs));
+    }
+    lcmBody.appendChild(section);
   }
 
+  body.appendChild(lcmBody);
   card.appendChild(body);
   return card;
 }
@@ -1169,7 +1297,7 @@ function renderIngestBatchCard(entries) {
     roleEl.textContent = d.role || "?";
     const tokEl = document.createElement("span");
     tokEl.className = "lcm-msg-tokens";
-    tokEl.textContent = `seq=${d.seq || "?"} ${fmt(d.tokenCount)} tok`;
+    tokEl.textContent = `seq=${d.seq || "?"} ${fmt(d.tokenCount)} token`;
     const textEl = document.createElement("div");
     textEl.className = "lcm-msg-text";
     textEl.textContent = d.contentPreview || "(empty)";
@@ -1275,13 +1403,14 @@ function renderRound(roundBlocks, roundIndex, traceIdx, engineActions = [], engi
 
   for (let i = 0; i < timeline.length; i++) {
     const item = timeline[i];
-    const summary = item.type === "engine"
-      ? buildEngineActionSummary(item.section, engine)
-      : buildBlockSummary(item.block);
     const isMiddle = item.type === "engine"
       ? true
       : item.block.direction !== "user->gateway" && item.block.direction !== "gateway->ui";
-    container.appendChild(renderBlockCard(summary, isMiddle));
+    container.appendChild(
+      item.type === "engine"
+        ? renderEngineActionCard(item.section, engine, isMiddle)
+        : renderBlockCard(buildBlockSummary(item.block), isMiddle)
+    );
     if (i < timeline.length - 1) {
       container.appendChild(renderInternalArrow());
     }
