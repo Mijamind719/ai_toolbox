@@ -324,7 +324,7 @@ function buildBlockSummary(block) {
     if (merged.reasoning) result.fields.push({ label: "推理过程", value: merged.reasoning, long: true });
     if (merged.toolCalls.length > 0) {
       for (const tc of merged.toolCalls) {
-        result.fields.push({ label: `工具调用: ${tc.name}`, value: tc.args || "(no args)", long: true });
+        result.fields.push({ label: `工具调用: ${tc.name}`, value: tc.args ? formatValue(tc.args) : "(no args)", long: true });
       }
     }
 
