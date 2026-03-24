@@ -33,6 +33,21 @@ HEARTBEAT_PREVIEW_MARKERS = (
 )
 
 
+def _normalize_tool_call_id(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+
+    normalized = value.strip()
+    if not normalized:
+        return None
+
+    if normalized.startswith("call_") and normalized[5:].isalnum():
+        return f"call:{normalized[5:]}"
+    if normalized.startswith("call") and normalized[4:].isalnum():
+        return f"call:{normalized[4:]}"
+    return normalized
+
+
 def _gateway_log_path(data_dir: Path) -> Path | None:
     configured = os.environ.get("CONTEXT_CAPTURE_GATEWAY_LOG_PATH", "").strip()
     if configured:
@@ -131,7 +146,7 @@ def _parse_gateway_tool_events(data_dir: Path, *, run_to_flow: dict[str, str]) -
                 "source": "gateway_log",
                 "run_id": run_id,
                 "tool": start_match.group("tool"),
-                "tool_call_id": start_match.group("tool_call_id"),
+                "tool_call_id": _normalize_tool_call_id(start_match.group("tool_call_id")),
                 "request_flow_id": request_flow_id,
             }
 
@@ -158,7 +173,7 @@ def _parse_gateway_tool_events(data_dir: Path, *, run_to_flow: dict[str, str]) -
             "source": "gateway_log",
             "run_id": run_id,
             "tool": end_match.group("tool"),
-            "tool_call_id": end_match.group("tool_call_id"),
+            "tool_call_id": _normalize_tool_call_id(end_match.group("tool_call_id")),
             "request_flow_id": request_flow_id,
         }
 
@@ -187,6 +202,82 @@ def _parse_gateway_tool_events(data_dir: Path, *, run_to_flow: dict[str, str]) -
     return parsed_events
 
 
+def _merge_tool_event(existing: Any, candidate: Any) -> Any:
+    existing_payload = getattr(existing, "payload_full", None)
+    candidate_payload = getattr(candidate, "payload_full", None)
+    if not isinstance(existing_payload, dict) or not isinstance(candidate_payload, dict):
+        return existing
+
+    merged_payload = dict(existing_payload)
+    for key, value in candidate_payload.items():
+        if key not in merged_payload or merged_payload[key] in (None, "", [], {}):
+            merged_payload[key] = value
+
+    existing_source = existing_payload.get("source")
+    candidate_source = candidate_payload.get("source")
+    if existing_source != candidate_source:
+        merged_payload["source"] = "merged"
+
+    merged_channel = getattr(existing, "channel", None)
+    candidate_channel = getattr(candidate, "channel", None)
+    if merged_channel != candidate_channel and candidate_channel == "cache_trace":
+        merged_channel = candidate_channel
+
+    return SimpleNamespace(
+        ts=min(getattr(existing, "ts", 0), getattr(candidate, "ts", 0)),
+        direction=getattr(existing, "direction", None),
+        channel=merged_channel,
+        event_type=getattr(existing, "event_type", None),
+        payload_full=merged_payload,
+    )
+
+
+def _synthetic_event_dedupe_key(event: Any) -> tuple[str, str, str, str] | tuple[str, str, str, int] | None:
+    event_type = getattr(event, "event_type", None)
+    if event_type not in {"tool_start", "tool_end", "model_tool_call"}:
+        return None
+
+    payload = getattr(event, "payload_full", None)
+    if not isinstance(payload, dict):
+        return None
+
+    run_id = payload.get("run_id")
+    tool = payload.get("tool")
+    if not isinstance(run_id, str) or not run_id or not isinstance(tool, str) or not tool:
+        return None
+
+    tool_call_id = _normalize_tool_call_id(payload.get("tool_call_id"))
+    if tool_call_id:
+        return event_type, run_id, tool, tool_call_id
+
+    message_ts = payload.get("message_ts")
+    if isinstance(message_ts, int):
+        return event_type, run_id, tool, message_ts
+
+    return None
+
+
+def _dedupe_tool_events(events: list[Any]) -> list[Any]:
+    deduped: list[Any] = []
+    tool_event_indexes: dict[tuple[Any, ...], int] = {}
+
+    for event in sorted(events, key=_event_sort_key):
+        dedupe_key = _synthetic_event_dedupe_key(event)
+        if dedupe_key is None:
+            deduped.append(event)
+            continue
+
+        existing_index = tool_event_indexes.get(dedupe_key)
+        if existing_index is None:
+            tool_event_indexes[dedupe_key] = len(deduped)
+            deduped.append(event)
+            continue
+
+        deduped[existing_index] = _merge_tool_event(deduped[existing_index], event)
+
+    return deduped
+
+
 def _load_traces(data_dir: Path) -> list[dict[str, Any]]:
     raw_store = JsonlStore(data_dir / "raw.jsonl")
     cache_trace_paths = [data_dir / "cache-trace.jsonl"]
@@ -207,6 +298,7 @@ def _load_traces(data_dir: Path) -> list[dict[str, Any]]:
     _attach_request_flow_id_to_cache_events(events, run_to_flow)
     run_to_flow = _run_to_request_flow(events)
     events.extend(_parse_gateway_tool_events(data_dir, run_to_flow=run_to_flow))
+    events = _dedupe_tool_events(events)
 
     return correlate_events(events)
 

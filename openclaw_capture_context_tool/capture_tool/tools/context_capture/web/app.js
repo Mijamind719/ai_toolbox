@@ -21,6 +21,18 @@ function formatTs(ts) {
 }
 function isObj(v) { return v !== null && typeof v === "object" && !Array.isArray(v); }
 function fmt(v) { return Number.isFinite(v) ? Math.trunc(v).toLocaleString() : "0"; }
+function formatValue(v) {
+  if (typeof v === "string") return v;
+  if (v === null || v === undefined) return "";
+  if (typeof v === "object") {
+    try {
+      return JSON.stringify(v, null, 2);
+    } catch {
+      return String(v);
+    }
+  }
+  return String(v);
+}
 function engineBadgeClass(engineId) {
   if (engineId === "lossless-claw") return "engine-lossless-claw";
   if (engineId === "openviking") return "engine-openviking";
@@ -139,7 +151,7 @@ function extractToolCalls(payload) {
     }
   }
   if (typeof payload.tool === "string" && payload.tool) {
-    calls.push({ name: payload.tool, args: "", id: payload.tool_call_id || "" });
+    calls.push({ name: payload.tool, args: payload.tool_arguments || "", id: payload.tool_call_id || "" });
   }
   return calls;
 }
@@ -270,7 +282,9 @@ function buildBlockSummary(block) {
     const model = first.model || "unknown";
     const msgs = Array.isArray(first.messages) ? first.messages : [];
     const lastUser = lastUserMessage(msgs);
-    result.title = lastUser || "(api request)";
+    const inputText = extractTextFromContent(first.input);
+    const promptText = extractTextFromContent(first.prompt);
+    result.title = lastUser || inputText || promptText || "(api request)";
     result.meta.push(`模型: ${model}`);
     if (msgs.length > 0) result.meta.push(`消息数: ${msgs.length}`);
     if (first.max_tokens) result.meta.push(`max_tokens: ${first.max_tokens}`);
@@ -289,11 +303,12 @@ function buildBlockSummary(block) {
 
   } else if (direction === "model->gateway") {
     const merged = mergeModelStreamEvents(events);
-    result.title = merged.text || (merged.reasoning ? `[thinking] ${merged.reasoning}` : "(model response)");
+    const toolCallNames = merged.toolCalls.map(tc => tc.name).filter(Boolean);
+    result.title = merged.text || (merged.reasoning ? `[thinking] ${merged.reasoning}` : (toolCallNames.length > 0 ? `工具调用: ${toolCallNames.join(", ")}` : "(model response)"));
     if (merged.usage) {
       result.meta.push(`input: ${fmt(merged.usage.input)}`);
       result.meta.push(`output: ${fmt(merged.usage.output)}`);
-      result.meta.push(`cacheRead: ${fmt(merged.usage.cacheRead)}`);
+        result.meta.push(`cacheRead: ${fmt(merged.usage.cacheRead)}`);
       result.meta.push(`cacheWrite: ${fmt(merged.usage.cacheWrite)}`);
       result.meta.push(`total: ${fmt(merged.usage.total)}`);
     }
@@ -318,6 +333,18 @@ function buildBlockSummary(block) {
     result.title = `工具: ${toolName}`;
     if (first.tool_call_id) result.meta.push(`call_id: ${first.tool_call_id}`);
     if (first.duration_ms) result.meta.push(`耗时: ${fmt(first.duration_ms)}ms`);
+    if (typeof first.source === "string" && first.source) result.meta.push(`source: ${first.source}`);
+    if (first.stop_reason) result.meta.push(`stop: ${first.stop_reason}`);
+    if (typeof first.is_error === "boolean") result.meta.push(first.is_error ? "status: error" : "status: ok");
+    if (first.tool_arguments) {
+      result.fields.push({ label: "参数", value: formatValue(first.tool_arguments), long: true });
+    }
+    if (first.result_text) {
+      result.fields.push({ label: "结果", value: first.result_text, long: true });
+    }
+    if (isObj(first.details) && Object.keys(first.details).length > 0) {
+      result.fields.push({ label: "详情", value: formatValue(first.details), long: true });
+    }
 
   } else if (direction === "gateway->ui") {
     let text = last.text || extractResponseText(last) || extractTextFromContent(last.content) || "";
