@@ -246,6 +246,144 @@ def _parse_sse_data(body_text: str | None) -> list[tuple[str, dict[str, Any]]]:
     return parsed_events
 
 
+def _normalize_tool_call_id(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+
+    normalized = value.strip()
+    if not normalized:
+        return None
+
+    if normalized.startswith("call_") and normalized[5:].isalnum():
+        return f"call:{normalized[5:]}"
+    if normalized.startswith("call") and normalized[4:].isalnum():
+        return f"call:{normalized[4:]}"
+    return normalized
+
+
+def _messages_after_last_user(messages: Any) -> list[dict[str, Any]]:
+    if not isinstance(messages, list):
+        return []
+
+    last_user_index = -1
+    for index, message in enumerate(messages):
+        if isinstance(message, dict) and message.get("role") == "user":
+            last_user_index = index
+
+    if last_user_index < 0:
+        candidates = messages
+    else:
+        candidates = messages[last_user_index + 1 :]
+
+    return [message for message in candidates if isinstance(message, dict)]
+
+
+def _cache_trace_tool_events(
+    *,
+    messages: Any,
+    ts: int,
+    payload_base: dict[str, Any],
+) -> list[EventRecord]:
+    messages = _messages_after_last_user(messages)
+    if not messages:
+        return []
+
+    events: list[EventRecord] = []
+    tool_names_by_call_id: dict[str, str] = {}
+
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+
+        role = message.get("role")
+        message_ts = _parse_ts_millis(message.get("timestamp")) or ts
+
+        if role == "assistant":
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "toolCall":
+                    continue
+
+                tool_name = block.get("name")
+                if not isinstance(tool_name, str) or not tool_name:
+                    continue
+
+                tool_call_id = _normalize_tool_call_id(block.get("id"))
+                if tool_call_id:
+                    tool_names_by_call_id[tool_call_id] = tool_name
+
+                payload = {
+                    **payload_base,
+                    "source": "cache_trace",
+                    "tool": tool_name,
+                    "tool_call_id": tool_call_id,
+                    "tool_arguments": block.get("arguments"),
+                    "message_ts": message_ts,
+                    "stop_reason": message.get("stopReason"),
+                }
+                events.append(
+                    EventRecord(
+                        ts=message_ts,
+                        direction="model->gateway",
+                        channel="cache_trace",
+                        event_type="model_tool_call",
+                        payload_full=payload,
+                    )
+                )
+                events.append(
+                    EventRecord(
+                        ts=message_ts,
+                        direction="gateway->tool",
+                        channel="cache_trace",
+                        event_type="tool_start",
+                        payload_full=payload,
+                    )
+                )
+            continue
+
+        if role != "toolResult":
+            continue
+
+        tool_call_id = _normalize_tool_call_id(message.get("toolCallId"))
+        tool_name = message.get("toolName")
+        if not isinstance(tool_name, str) or not tool_name:
+            if tool_call_id:
+                tool_name = tool_names_by_call_id.get(tool_call_id)
+        if not isinstance(tool_name, str) or not tool_name:
+            continue
+
+        details = message.get("details")
+        payload: dict[str, Any] = {
+            **payload_base,
+            "source": "cache_trace",
+            "tool": tool_name,
+            "tool_call_id": tool_call_id,
+            "message_ts": message_ts,
+            "result_text": _extract_text_from_content_block(message.get("content")),
+            "details": details,
+            "is_error": bool(message.get("isError")),
+        }
+        if isinstance(details, dict):
+            duration_ms = details.get("durationMs")
+            if isinstance(duration_ms, int):
+                payload["duration_ms"] = duration_ms
+
+        events.append(
+            EventRecord(
+                ts=message_ts,
+                direction="tool->gateway",
+                channel="cache_trace",
+                event_type="tool_end",
+                payload_full=payload,
+            )
+        )
+
+    return events
+
+
 def _parse_cache_trace_record(raw: dict[str, Any]) -> list[EventRecord]:
     stage = raw.get("stage")
     if not isinstance(stage, str):
@@ -271,7 +409,7 @@ def _parse_cache_trace_record(raw: dict[str, Any]) -> list[EventRecord]:
             "options": raw.get("options"),
             "source": "cache_trace",
         }
-        return [
+        events = [
             EventRecord(
                 ts=ts,
                 direction="gateway->model",
@@ -280,6 +418,8 @@ def _parse_cache_trace_record(raw: dict[str, Any]) -> list[EventRecord]:
                 payload_full=payload,
             )
         ]
+        events.extend(_cache_trace_tool_events(messages=raw.get("messages"), ts=ts, payload_base=payload_base))
+        return events
 
     if stage == "session:after":
         messages = raw.get("messages")
@@ -303,7 +443,8 @@ def _parse_cache_trace_record(raw: dict[str, Any]) -> list[EventRecord]:
             "usage": assistant_message.get("usage") if isinstance(assistant_message, dict) else None,
             "source": "cache_trace",
         }
-        return [
+        events = _cache_trace_tool_events(messages=messages, ts=ts, payload_base=payload_base)
+        events.append(
             EventRecord(
                 ts=ts,
                 direction="model->gateway",
@@ -311,7 +452,8 @@ def _parse_cache_trace_record(raw: dict[str, Any]) -> list[EventRecord]:
                 event_type="model_response_internal",
                 payload_full=payload,
             )
-        ]
+        )
+        return events
 
     return []
 

@@ -63,6 +63,7 @@ CONTEXT_CAPTURE_HTTP_URL_PREFIX="${CONTEXT_CAPTURE_HTTP_URL_PREFIX:-}"
 MITM_LOG="${MITM_LOG:-$STATE_DIR/mitmdump.log}"
 API_LOG="${API_LOG:-$STATE_DIR/context_capture_api.log}"
 GATEWAY_LOG="${GATEWAY_LOG:-$STATE_DIR/openclaw_gateway_capture.log}"
+GATEWAY_STRUCTURED_LOG="${GATEWAY_STRUCTURED_LOG:-$CAPTURE_DATA_DIR/gateway.log.jsonl}"
 
 CAPTURE_API_URL="${CAPTURE_API_URL:-}"
 CAPTURE_PROXY_URL="${CAPTURE_PROXY_URL:-}"
@@ -117,6 +118,7 @@ normalize_paths() {
   MITM_LOG="$(abs_from_script_dir "$MITM_LOG")"
   API_LOG="$(abs_from_script_dir "$API_LOG")"
   GATEWAY_LOG="$(abs_from_script_dir "$GATEWAY_LOG")"
+  GATEWAY_STRUCTURED_LOG="$(abs_from_script_dir "$GATEWAY_STRUCTURED_LOG")"
   MITM_PID_FILE="$(abs_from_script_dir "$MITM_PID_FILE")"
   API_PID_FILE="$(abs_from_script_dir "$API_PID_FILE")"
   GATEWAY_PID_FILE="$(abs_from_script_dir "$GATEWAY_PID_FILE")"
@@ -610,36 +612,56 @@ start_gateway_capture() {
   fi
 
   log "starting managed capture gateway on $GATEWAY_BASE_URL (bind=$OPENCLAW_GATEWAY_BIND)"
+  local api_python="$CAPTURE_API_PYTHON"
+  if [[ -z "$api_python" ]]; then
+    api_python="$CAPTURE_TOOL_DIR/.venv/bin/python"
+  fi
+  if [[ ! -x "$api_python" ]]; then
+    api_python="$(command -v python3 || true)"
+  fi
+  [[ -n "$api_python" ]] || die "python3 not found for gateway log forwarding"
+
+  local forwarder="$CAPTURE_TOOL_DIR/tools/context_capture/gateway_log_forwarder.py"
+  [[ -f "$forwarder" ]] || die "gateway log forwarder not found: $forwarder"
+
   if [[ -f "$OPENCLAW_BIN" ]]; then
-    nohup env \
-      HTTP_PROXY="$CAPTURE_PROXY_URL" \
-      HTTPS_PROXY="$CAPTURE_PROXY_URL" \
-      ALL_PROXY="$CAPTURE_PROXY_URL" \
-      NO_PROXY="" \
-      NODE_USE_ENV_PROXY=1 \
-      OPENCLAW_GATEWAY_TOKEN="$token" \
-      OPENCLAW_CACHE_TRACE=1 \
-      OPENCLAW_CACHE_TRACE_FILE="$CAPTURE_DATA_DIR/cache-trace.jsonl" \
-      OPENCLAW_CACHE_TRACE_MESSAGES=1 \
-      OPENCLAW_CACHE_TRACE_PROMPT=1 \
-      OPENCLAW_CACHE_TRACE_SYSTEM=1 \
-      node "$OPENCLAW_BIN" gateway --port "$port" --token "$token" --bind "$OPENCLAW_GATEWAY_BIND" \
-        >"$GATEWAY_LOG" 2>&1 &
+    nohup bash -lc "
+      set -euo pipefail
+      env \
+        HTTP_PROXY='$CAPTURE_PROXY_URL' \
+        HTTPS_PROXY='$CAPTURE_PROXY_URL' \
+        ALL_PROXY='$CAPTURE_PROXY_URL' \
+        NO_PROXY='' \
+        NODE_USE_ENV_PROXY=1 \
+        OPENCLAW_GATEWAY_TOKEN='$token' \
+        OPENCLAW_CACHE_TRACE=1 \
+        OPENCLAW_CACHE_TRACE_FILE='$CAPTURE_DATA_DIR/cache-trace.jsonl' \
+        OPENCLAW_CACHE_TRACE_MESSAGES=1 \
+        OPENCLAW_CACHE_TRACE_PROMPT=1 \
+        OPENCLAW_CACHE_TRACE_SYSTEM=1 \
+        node '$OPENCLAW_BIN' gateway --port '$port' --token '$token' --bind '$OPENCLAW_GATEWAY_BIND' 2>&1 \
+        | tee '$GATEWAY_LOG' \
+        | '$api_python' '$forwarder' '$GATEWAY_STRUCTURED_LOG'
+    " >/dev/null 2>&1 &
   else
-    nohup env \
-      HTTP_PROXY="$CAPTURE_PROXY_URL" \
-      HTTPS_PROXY="$CAPTURE_PROXY_URL" \
-      ALL_PROXY="$CAPTURE_PROXY_URL" \
-      NO_PROXY="" \
-      NODE_USE_ENV_PROXY=1 \
-      OPENCLAW_GATEWAY_TOKEN="$token" \
-      OPENCLAW_CACHE_TRACE=1 \
-      OPENCLAW_CACHE_TRACE_FILE="$CAPTURE_DATA_DIR/cache-trace.jsonl" \
-      OPENCLAW_CACHE_TRACE_MESSAGES=1 \
-      OPENCLAW_CACHE_TRACE_PROMPT=1 \
-      OPENCLAW_CACHE_TRACE_SYSTEM=1 \
-      "$OPENCLAW_BIN" gateway --port "$port" --token "$token" --bind "$OPENCLAW_GATEWAY_BIND" \
-        >"$GATEWAY_LOG" 2>&1 &
+    nohup bash -lc "
+      set -euo pipefail
+      env \
+        HTTP_PROXY='$CAPTURE_PROXY_URL' \
+        HTTPS_PROXY='$CAPTURE_PROXY_URL' \
+        ALL_PROXY='$CAPTURE_PROXY_URL' \
+        NO_PROXY='' \
+        NODE_USE_ENV_PROXY=1 \
+        OPENCLAW_GATEWAY_TOKEN='$token' \
+        OPENCLAW_CACHE_TRACE=1 \
+        OPENCLAW_CACHE_TRACE_FILE='$CAPTURE_DATA_DIR/cache-trace.jsonl' \
+        OPENCLAW_CACHE_TRACE_MESSAGES=1 \
+        OPENCLAW_CACHE_TRACE_PROMPT=1 \
+        OPENCLAW_CACHE_TRACE_SYSTEM=1 \
+        '$OPENCLAW_BIN' gateway --port '$port' --token '$token' --bind '$OPENCLAW_GATEWAY_BIND' 2>&1 \
+        | tee '$GATEWAY_LOG' \
+        | '$api_python' '$forwarder' '$GATEWAY_STRUCTURED_LOG'
+    " >/dev/null 2>&1 &
   fi
   echo $! > "$GATEWAY_PID_FILE"
 

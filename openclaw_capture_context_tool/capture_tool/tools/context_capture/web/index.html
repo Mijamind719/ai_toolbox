@@ -245,6 +245,13 @@
       }
       .stage-label { display: flex; align-items: center; gap: 6px; }
       .stage-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+      .stage-toggle {
+        width: 14px; height: 14px; padding: 0;
+        border: none; background: transparent; color: inherit;
+        display: inline-flex; align-items: center; justify-content: center;
+        cursor: pointer; flex-shrink: 0; font-size: 11px; line-height: 1;
+      }
+      .stage-toggle:hover { opacity: 0.8; }
       .stage-time { color: var(--muted); font-size: 11px; font-weight: 400; }
 
       .stage-body { padding: 8px 10px; }
@@ -303,6 +310,12 @@
       .stage-tool .stage-dot { background: var(--orange); }
       .stage-to-user .stage-header { background: #ecfeff; color: var(--teal); }
       .stage-to-user .stage-dot { background: var(--teal); }
+      .stage-engine .stage-header { background: #eef3ff; color: var(--accent); }
+      .stage-engine .stage-dot { background: var(--accent); }
+      .stage-engine {
+        border-color: #c7d6f8;
+        background: #f8fbff;
+      }
 
       /* LCM step card (inline with HTTP cards) */
       .stage-lcm .lcm-step-header {
@@ -323,10 +336,22 @@
       .lcm-kv { display: flex; gap: 6px; padding: 2px 0; }
       .lcm-kv-label { color: var(--muted); font-weight: 600; min-width: 80px; font-size: 11px; flex-shrink: 0; }
       .lcm-kv-value { color: var(--ink); }
+      .lcm-kv-inline {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 600;
+        line-height: 1.4;
+      }
       .lcm-saving { color: var(--green); font-weight: 700; }
 
       .lcm-messages-section {
         margin-top: 6px; border-top: 1px solid #ede9f8; padding-top: 4px;
+      }
+      .lcm-section-title {
+        margin-bottom: 6px;
+        color: var(--purple);
+        font-size: 12px;
+        font-weight: 700;
       }
       .lcm-messages-section summary {
         cursor: pointer; color: var(--purple); font-size: 11px;

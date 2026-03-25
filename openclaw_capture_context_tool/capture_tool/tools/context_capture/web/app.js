@@ -21,6 +21,18 @@ function formatTs(ts) {
 }
 function isObj(v) { return v !== null && typeof v === "object" && !Array.isArray(v); }
 function fmt(v) { return Number.isFinite(v) ? Math.trunc(v).toLocaleString() : "0"; }
+function formatValue(v) {
+  if (typeof v === "string") return v;
+  if (v === null || v === undefined) return "";
+  if (typeof v === "object") {
+    try {
+      return JSON.stringify(v, null, 2);
+    } catch {
+      return String(v);
+    }
+  }
+  return String(v);
+}
 function engineBadgeClass(engineId) {
   if (engineId === "lossless-claw") return "engine-lossless-claw";
   if (engineId === "openviking") return "engine-openviking";
@@ -43,6 +55,7 @@ const STAGE_CONFIG = {
   "tool->gateway":  { label: "tool -> openclaw",    css: "stage-tool" },
   "gateway->ui":    { label: "openclaw -> user",    css: "stage-to-user" },
 };
+const ENGINE_ACTION_KINDS = new Set(["assemble", "capture", "ingest", "recall"]);
 
 function classifyDirection(event) {
   const d = event?.direction;
@@ -97,6 +110,10 @@ function extractResponseText(payload) {
   if (typeof payload.response_text === "string" && payload.response_text) return payload.response_text;
   if (typeof payload.text === "string" && payload.text) return payload.text;
   if (typeof payload.merged_text === "string" && payload.merged_text) return payload.merged_text;
+  if (isObj(payload.assistant_message)) {
+    const assistantText = extractTextFromContent(payload.assistant_message.content);
+    if (assistantText) return assistantText;
+  }
   const output = payload.output;
   if (Array.isArray(output)) {
     for (const item of output) {
@@ -119,8 +136,10 @@ function extractUsage(payload) {
   if (!isObj(u)) return null;
   const input = u.input_tokens || u.inputTokens || u.input || 0;
   const output = u.output_tokens || u.outputTokens || u.output || 0;
+  const cacheRead = u.cache_read_tokens || u.cacheReadTokens || u.cache_read || u.cacheRead || 0;
+  const cacheWrite = u.cache_write_tokens || u.cacheWriteTokens || u.cache_write || u.cacheWrite || 0;
   const total = u.total_tokens || u.totalTokens || u.total || (input + output);
-  return { input, output, total };
+  return { input, output, cacheRead, cacheWrite, total };
 }
 
 function extractToolCalls(payload) {
@@ -133,7 +152,7 @@ function extractToolCalls(payload) {
     }
   }
   if (typeof payload.tool === "string" && payload.tool) {
-    calls.push({ name: payload.tool, args: "", id: payload.tool_call_id || "" });
+    calls.push({ name: payload.tool, args: payload.tool_arguments || "", id: payload.tool_call_id || "" });
   }
   return calls;
 }
@@ -264,7 +283,9 @@ function buildBlockSummary(block) {
     const model = first.model || "unknown";
     const msgs = Array.isArray(first.messages) ? first.messages : [];
     const lastUser = lastUserMessage(msgs);
-    result.title = lastUser || "(api request)";
+    const inputText = extractTextFromContent(first.input);
+    const promptText = extractTextFromContent(first.prompt);
+    result.title = lastUser || inputText || promptText || "(api request)";
     result.meta.push(`模型: ${model}`);
     if (msgs.length > 0) result.meta.push(`消息数: ${msgs.length}`);
     if (first.max_tokens) result.meta.push(`max_tokens: ${first.max_tokens}`);
@@ -283,10 +304,13 @@ function buildBlockSummary(block) {
 
   } else if (direction === "model->gateway") {
     const merged = mergeModelStreamEvents(events);
-    result.title = merged.text || (merged.reasoning ? `[thinking] ${merged.reasoning}` : "(model response)");
+    const toolCallNames = merged.toolCalls.map(tc => tc.name).filter(Boolean);
+    result.title = merged.text || (merged.reasoning ? `[thinking] ${merged.reasoning}` : (toolCallNames.length > 0 ? `工具调用: ${toolCallNames.join(", ")}` : "(model response)"));
     if (merged.usage) {
       result.meta.push(`input: ${fmt(merged.usage.input)}`);
       result.meta.push(`output: ${fmt(merged.usage.output)}`);
+        result.meta.push(`cacheRead: ${fmt(merged.usage.cacheRead)}`);
+      result.meta.push(`cacheWrite: ${fmt(merged.usage.cacheWrite)}`);
       result.meta.push(`total: ${fmt(merged.usage.total)}`);
     }
     if (typeof ts === "number" && typeof tsEnd === "number") {
@@ -301,7 +325,7 @@ function buildBlockSummary(block) {
     if (merged.reasoning) result.fields.push({ label: "推理过程", value: merged.reasoning, long: true });
     if (merged.toolCalls.length > 0) {
       for (const tc of merged.toolCalls) {
-        result.fields.push({ label: `工具调用: ${tc.name}`, value: tc.args || "(no args)", long: true });
+        result.fields.push({ label: `工具调用: ${tc.name}`, value: tc.args ? formatValue(tc.args) : "(no args)", long: true });
       }
     }
 
@@ -310,6 +334,18 @@ function buildBlockSummary(block) {
     result.title = `工具: ${toolName}`;
     if (first.tool_call_id) result.meta.push(`call_id: ${first.tool_call_id}`);
     if (first.duration_ms) result.meta.push(`耗时: ${fmt(first.duration_ms)}ms`);
+    if (typeof first.source === "string" && first.source) result.meta.push(`source: ${first.source}`);
+    if (first.stop_reason) result.meta.push(`stop: ${first.stop_reason}`);
+    if (typeof first.is_error === "boolean") result.meta.push(first.is_error ? "status: error" : "status: ok");
+    if (first.tool_arguments) {
+      result.fields.push({ label: "参数", value: formatValue(first.tool_arguments), long: true });
+    }
+    if (first.result_text) {
+      result.fields.push({ label: "结果", value: first.result_text, long: true });
+    }
+    if (isObj(first.details) && Object.keys(first.details).length > 0) {
+      result.fields.push({ label: "详情", value: formatValue(first.details), long: true });
+    }
 
   } else if (direction === "gateway->ui") {
     let text = last.text || extractResponseText(last) || extractTextFromContent(last.content) || "";
@@ -324,6 +360,29 @@ function buildBlockSummary(block) {
 
 // --------------- rendering ---------------
 
+function createStageToggle(labelText) {
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "stage-toggle";
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.setAttribute("aria-label", `展开 ${labelText}`);
+  toggle.textContent = "▸";
+  return toggle;
+}
+
+function attachStageToggleBehavior(labelEl, body, labelText) {
+  const toggle = createStageToggle(labelText);
+  labelEl.appendChild(toggle);
+  body.hidden = true;
+  toggle.addEventListener("click", () => {
+    const expanded = body.hidden;
+    body.hidden = !expanded;
+    toggle.textContent = expanded ? "▾" : "▸";
+    toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+    toggle.setAttribute("aria-label", expanded ? `折叠 ${labelText}` : `展开 ${labelText}`);
+  });
+}
+
 function renderBlockCard(summary, compact) {
   const { config, ts, title, lines, meta, fields } = summary;
   const card = document.createElement("div");
@@ -333,9 +392,9 @@ function renderBlockCard(summary, compact) {
   header.className = "stage-header";
   const labelEl = document.createElement("span");
   labelEl.className = "stage-label";
-  const dot = document.createElement("span");
-  dot.className = "stage-dot";
-  labelEl.appendChild(dot);
+  const body = document.createElement("div");
+  body.className = "stage-body";
+  attachStageToggleBehavior(labelEl, body, config?.label || "详情");
   labelEl.appendChild(document.createTextNode(config.label));
   const timeEl = document.createElement("span");
   timeEl.className = "stage-time";
@@ -343,9 +402,6 @@ function renderBlockCard(summary, compact) {
   header.appendChild(labelEl);
   header.appendChild(timeEl);
   card.appendChild(header);
-
-  const body = document.createElement("div");
-  body.className = "stage-body";
 
   const titleEl = document.createElement("pre");
   titleEl.className = "stage-text";
@@ -399,6 +455,155 @@ function renderInternalArrow() {
   el.className = "internal-arrow";
   el.textContent = "\u25BC";
   return el;
+}
+
+function sectionTs(section) {
+  if (!isObj(section)) return null;
+  if (typeof section.started_at === "number") return section.started_at;
+  if (typeof section.ended_at === "number") return section.ended_at;
+  return null;
+}
+
+function sectionWindow(section) {
+  if (!isObj(section)) return null;
+  const start = typeof section.started_at === "number" ? section.started_at : sectionTs(section);
+  const end = typeof section.ended_at === "number" ? section.ended_at : start;
+  if (typeof start !== "number" || typeof end !== "number") return null;
+  return { start, end };
+}
+
+function actionEngineSections(trace) {
+  const sections = Array.isArray(trace?.engine?.sections) ? trace.engine.sections : [];
+  return sections.filter(section => ENGINE_ACTION_KINDS.has(section?.kind) && sectionWindow(section));
+}
+
+function supplementalEngineSections(trace) {
+  const sections = Array.isArray(trace?.engine?.sections) ? trace.engine.sections : [];
+  return sections.filter(section => !ENGINE_ACTION_KINDS.has(section?.kind));
+}
+
+function roundWindow(roundBlocks) {
+  const start = roundBlocks[0]?.events?.[0]?.ts;
+  const lastBlock = roundBlocks[roundBlocks.length - 1];
+  const end = lastBlock?.events?.[lastBlock.events.length - 1]?.ts;
+  if (typeof start !== "number" || typeof end !== "number") return null;
+  return { start, end };
+}
+
+function assignEngineActionsToRounds(rounds, sections) {
+  const assignments = rounds.map(() => []);
+  if (!Array.isArray(rounds) || !Array.isArray(sections) || rounds.length === 0 || sections.length === 0) {
+    return assignments;
+  }
+
+  const windows = rounds.map(roundWindow);
+  for (const section of sections) {
+    const window = sectionWindow(section);
+    if (!window) continue;
+
+    let bestIdx = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < windows.length; i++) {
+      const round = windows[i];
+      if (!round) continue;
+      const overlaps = window.start <= round.end && window.end >= round.start;
+      if (!overlaps) continue;
+      const dist = Math.abs(window.start - round.start);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestIdx = i;
+      }
+    }
+
+    if (bestIdx >= 0) {
+      assignments[bestIdx].push(section);
+    }
+  }
+
+  for (const bucket of assignments) {
+    bucket.sort((a, b) => (sectionTs(a) || 0) - (sectionTs(b) || 0));
+  }
+  return assignments;
+}
+
+function anchorSortKeyForSection(section, roundBlocks) {
+  const kind = section?.kind;
+  const firstModelIndex = roundBlocks.findIndex(block => block?.direction === "gateway->model");
+  let lastModelResponseIndex = -1;
+  for (let i = roundBlocks.length - 1; i >= 0; i--) {
+    if (roundBlocks[i]?.direction === "model->gateway") {
+      lastModelResponseIndex = i;
+      break;
+    }
+  }
+
+  if ((kind === "assemble" || kind === "recall") && firstModelIndex >= 0) {
+    return firstModelIndex - 0.5;
+  }
+  if ((kind === "capture" || kind === "ingest") && lastModelResponseIndex >= 0) {
+    return lastModelResponseIndex + 0.5;
+  }
+
+  const sectionTime = sectionTs(section) || 0;
+  for (let i = 0; i < roundBlocks.length; i++) {
+    const ts = roundBlocks[i]?.events?.[0]?.ts;
+    if (typeof ts === "number" && sectionTime < ts) {
+      return i - 0.5;
+    }
+  }
+  return roundBlocks.length + 0.5;
+}
+
+function buildEngineActionSummary(section, engine) {
+  const items = Array.isArray(section?.items) ? section.items : [];
+  const stats = Array.isArray(section?.stats) ? section.stats : [];
+  const fields = [];
+
+  for (const item of items) {
+    fields.push({
+      label: item?.label || "Item",
+      value: item?.value || "",
+      long: true,
+    });
+  }
+
+  if (Array.isArray(section?.raw_refs) && section.raw_refs.length > 0) {
+    for (const ref of section.raw_refs) {
+      fields.push({
+        label: `原始引用: ${ref?.label || "raw"}`,
+        value: ref?.value || "",
+        long: true,
+      });
+    }
+  }
+
+  return {
+    config: { label: "context engine", css: "stage-engine" },
+    ts: sectionTs(section),
+    tsEnd: typeof section?.ended_at === "number" ? section.ended_at : sectionTs(section),
+    title: section?.title || section?.kind || "Context Engine",
+    lines: [],
+    meta: [
+      engine?.label ? `engine: ${engine.label}` : "",
+      ...stats.map(stat => `${stat.label}: ${stat.value}`),
+    ].filter(Boolean),
+    fields,
+  };
+}
+
+function renderEngineActionCard(section, engine, compact) {
+  if (section?.kind === "assemble") {
+    const entries = parseSectionRawEntries(section);
+    const hasAssembleStages = entries.some(entry => {
+      const stage = entry?.stage;
+      return stage === "assemble_input" || stage === "context_assemble" || stage === "assemble_output";
+    });
+    if (hasAssembleStages) {
+      return renderAssembleCard(entries, engine);
+    }
+  }
+
+  return renderBlockCard(buildEngineActionSummary(section, engine), compact);
 }
 
 // --------------- LCM diagnostics rendering ---------------
@@ -732,7 +937,7 @@ function renderLcmStep(entry) {
       roleEl.textContent = m.role || "?";
       const tokEl = document.createElement("span");
       tokEl.className = "lcm-msg-tokens";
-      tokEl.textContent = `${fmt(m.tokens)} tok`;
+      tokEl.textContent = `${fmt(m.tokens)} token`;
       const textEl = document.createElement("div");
       textEl.className = "lcm-msg-text";
       textEl.textContent = m.preview || "(empty)";
@@ -766,44 +971,156 @@ function renderLcmStep(entry) {
 
 function renderAssembleMsgList(msgs) {
   const list = document.createElement("div");
-  list.className = "lcm-messages-list";
+  list.className = "stage-fields";
   for (const m of msgs) {
-    const el = document.createElement("div");
+    const row = document.createElement("div");
+    row.className = "stage-field-row stage-field-long";
     const kind = m.kind || "raw";
-    el.className = "lcm-msg lcm-msg-" + (m.role || "unknown") + (kind === "summary" ? " lcm-msg-summary" : "");
-    const roleEl = document.createElement("span");
-    roleEl.className = "lcm-msg-role";
-    roleEl.textContent = (kind === "summary" ? "\u2702 " : "") + (m.role || "?");
-    const tokEl = document.createElement("span");
-    tokEl.className = "lcm-msg-tokens";
-    tokEl.textContent = `${fmt(m.tokens)} tok` + (kind === "summary" ? " [\u6458\u8981]" : "");
-    const textEl = document.createElement("div");
-    textEl.className = "lcm-msg-text";
-    textEl.textContent = m.preview || m.content || "(empty)";
-    el.appendChild(roleEl);
-    el.appendChild(tokEl);
-    el.appendChild(textEl);
-    list.appendChild(el);
+    const labelEl = document.createElement("span");
+    labelEl.className = "stage-field-label";
+    const role = m.role || "?";
+    labelEl.textContent = kind === "summary"
+      ? `[summary:${role}] ${fmt(m.tokens)} token`
+      : `[${role}] ${fmt(m.tokens)} token`;
+    const textEl = document.createElement("span");
+    textEl.className = "stage-field-value";
+    textEl.textContent = assembleMessagePreview(m, msgs) || "(empty)";
+    row.appendChild(labelEl);
+    row.appendChild(textEl);
+    list.appendChild(row);
   }
   return list;
 }
 
-function renderAssembleCard(assembleEntries) {
+function basenamePath(path) {
+  if (typeof path !== "string" || !path) return "";
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || path;
+}
+
+function summarizeToolCallPreview(text) {
+  if (typeof text !== "string" || !text.trim()) return "";
+  try {
+    const parsed = JSON.parse(text);
+    const blocks = Array.isArray(parsed) ? parsed : [parsed];
+    const toolCall = blocks.find(block => isObj(block) && (block.type === "toolCall" || block.type === "tool_use"));
+    if (!isObj(toolCall)) return "";
+    const toolName = toolCall.name || "unknown";
+    const args = isObj(toolCall.arguments) ? toolCall.arguments : (isObj(toolCall.input) ? toolCall.input : {});
+    if (typeof args.path === "string" && args.path) {
+      return `toolCall: ${toolName}(${basenamePath(args.path)})`;
+    }
+    if (typeof args.command === "string" && args.command) {
+      return `toolCall: ${toolName}(${args.command})`;
+    }
+    return `toolCall: ${toolName}`;
+  } catch {
+    return "";
+  }
+}
+
+function inferReadTargetFromToolResultPreview(text) {
+  if (typeof text !== "string" || !text.trim()) return "";
+  const heading = text.match(/^#\s+([^\n#]+)$/m);
+  if (!heading) return "";
+  const label = heading[1].trim();
+  const fileish = label.match(/^([A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+)/);
+  return fileish ? fileish[1] : label;
+}
+
+function assembleMessagePreview(message, allMessages) {
+  const direct = message?.preview || message?.content || "";
+  const summarized = summarizeToolCallPreview(direct);
+  if (summarized) return summarized;
+  if (direct) return direct;
+
+  if (message?.role !== "assistant" || !Array.isArray(allMessages)) {
+    return "";
+  }
+
+  const idx = allMessages.indexOf(message);
+  if (idx < 0) return "";
+  const next = allMessages[idx + 1];
+  if (next?.role === "toolResult" && typeof next.preview === "string" && next.preview) {
+    const readTarget = inferReadTargetFromToolResultPreview(next.preview);
+    if (readTarget) return `toolCall: read(${readTarget})`;
+    return "toolCall";
+  }
+  return "";
+}
+
+function renderMessageDetails(summaryText, msgs) {
+  const details = document.createElement("details");
+  details.className = "stage-expand";
+  const summary = document.createElement("summary");
+  summary.textContent = summaryText;
+  details.appendChild(summary);
+  details.appendChild(renderAssembleMsgList(msgs));
+  return details;
+}
+
+function parseSectionRawEntries(section) {
+  const refs = Array.isArray(section?.raw_refs) ? section.raw_refs : [];
+  const entries = [];
+  for (const ref of refs) {
+    if (!isObj(ref) || typeof ref.value !== "string") continue;
+    try {
+      const parsed = JSON.parse(ref.value);
+      if (isObj(parsed)) entries.push(parsed);
+    } catch {
+      // Ignore malformed raw refs and keep rendering the rest of the card.
+    }
+  }
+  return entries;
+}
+
+function renderAssembleSection(titleText) {
+  const section = document.createElement("section");
+  section.className = "lcm-messages-section";
+  const title = document.createElement("div");
+  title.className = "lcm-section-title";
+  title.textContent = titleText;
+  section.appendChild(title);
+  return section;
+}
+
+function renderAssembleCard(assembleEntries, engine) {
   const card = document.createElement("div");
-  card.className = "stage-card stage-lcm";
+  card.className = "stage-card stage-engine";
   const header = document.createElement("div");
-  header.className = "lcm-step-header";
+  header.className = "stage-header";
   const label = document.createElement("span");
-  label.className = "lcm-step-stage";
-  label.textContent = "Assemble \u4e0a\u4e0b\u6587\u7ec4\u88c5";
+  label.className = "stage-label";
+  const body = document.createElement("div");
+  body.className = "stage-body";
+  attachStageToggleBehavior(label, body, "context engine");
+  label.appendChild(document.createTextNode("context engine"));
   const timeLabel = document.createElement("span");
-  timeLabel.className = "lcm-step-time";
+  timeLabel.className = "stage-time";
   timeLabel.textContent = formatTs(assembleEntries[0]?.ts);
   header.appendChild(label);
   header.appendChild(timeLabel);
   card.appendChild(header);
-  const body = document.createElement("div");
-  body.className = "lcm-step-body";
+
+  const titleEl = document.createElement("pre");
+  titleEl.className = "stage-text";
+  titleEl.textContent = "Context Assemble";
+  body.appendChild(titleEl);
+  const metaRow = document.createElement("div");
+  metaRow.className = "stage-meta-row";
+  for (const tag of [
+    engine?.label ? `engine: ${engine.label}` : "",
+    `诊断条目: ${assembleEntries.length}`,
+  ].filter(Boolean)) {
+    const span = document.createElement("span");
+    span.className = "stage-meta-tag";
+    span.textContent = tag;
+    metaRow.appendChild(span);
+  }
+  body.appendChild(metaRow);
+
+  const lcmBody = document.createElement("div");
+  lcmBody.className = "lcm-step-body";
 
   const inputEntry = assembleEntries.find(e => e.stage === "assemble_input");
   const contextEntry = assembleEntries.find(e => e.stage === "context_assemble");
@@ -833,56 +1150,100 @@ function renderAssembleCard(assembleEntries) {
     const row = document.createElement("div");
     row.className = "lcm-kv";
     const rl = document.createElement("span"); rl.className = "lcm-kv-label"; rl.textContent = k;
-    const rv = document.createElement("span"); rv.className = "lcm-kv-value" + (k.includes("\u8282\u7701") ? " lcm-saving" : ""); rv.textContent = v;
+    const rv = document.createElement("span"); rv.className = "lcm-kv-inline" + (k.includes("\u8282\u7701") ? " lcm-saving" : ""); rv.textContent = v;
     row.appendChild(rl); row.appendChild(rv); sumPanel.appendChild(row);
   }
   const note = document.createElement("div");
   note.className = "lcm-assemble-note";
   note.style.whiteSpace = "pre-wrap";
-  note.textContent = "\u2139 tokens \u4e3a engine \u5b58\u50a8\u7684 content \u8ba1\u6570\uff08Math.ceil(content.length/4)\uff09\uff0c\u6d88\u606f\u5217\u8868\u4e2d\u7684 tok \u4e3a\u7eaf\u6587\u672c\u7c97\u4f30\uff0c\u53ef\u80fd\u504f\u5c0f";
+  note.textContent = "\u2139 tokens \u4e3a engine \u5b58\u50a8\u7684 content \u8ba1\u6570\uff08Math.ceil(content.length/4)\uff09\uff0c\u6d88\u606f\u5217\u8868\u4e2d\u7684 token \u4e3a\u7eaf\u6587\u672c\u7c97\u4f30\uff0c\u53ef\u80fd\u504f\u5c0f";
   sumPanel.appendChild(note);
-  body.appendChild(sumPanel);
+  lcmBody.appendChild(sumPanel);
+
+  const evaluateEntry = assembleEntries.find(e => e.stage === "compaction_evaluate");
+  if (evaluateEntry) {
+    const d = evaluateEntry.data || {};
+    const section = renderAssembleSection("压缩决策");
+    const kvs = [
+      ["当前 tokens", fmt(d.currentTokens)],
+      ["tokenBudget", fmt(d.tokenBudget)],
+      ["contextThreshold", d.contextThreshold ?? ""],
+      ["阈值", fmt(d.threshold)],
+      ["需要压缩", d.shouldCompact ? "是" : "否"],
+    ];
+    if (d.reason && d.reason !== "none") kvs.push(["原因", d.reason]);
+    for (const [k, v] of kvs) {
+      const row = document.createElement("div");
+      row.className = "lcm-kv";
+      const rl = document.createElement("span");
+      rl.className = "lcm-kv-label";
+      rl.textContent = k;
+      const rv = document.createElement("span");
+      rv.className = "lcm-kv-inline";
+      rv.textContent = String(v ?? "");
+      row.appendChild(rl);
+      row.appendChild(rv);
+      section.appendChild(row);
+    }
+    lcmBody.appendChild(section);
+  }
 
   if (inputEntry) {
     const d = inputEntry.data || {};
-    const section = document.createElement("details");
-    section.className = "lcm-messages-section";
-    const sum = document.createElement("summary");
+    const section = renderAssembleSection("原始消息输入");
     const inputMsgs = d.messages || [];
     const inputMsgTokens = inputMsgs.reduce((s, m) => s + (m.tokens || 0), 0);
-    sum.textContent = "\u{1f4e5} \u5386\u53f2\u4e0a\u4e0b\u6587\u6d88\u606f\uff08" + (d.messagesCount||0) + " \u6761\uff0c" + fmt(inputMsgTokens) + " tok\uff09";
-    section.appendChild(sum);
+    const intro = document.createElement("div");
+    intro.className = "lcm-kv";
+    const introLabel = document.createElement("span");
+    introLabel.className = "lcm-kv-label";
+    introLabel.textContent = "消息数";
+    const introValue = document.createElement("span");
+    introValue.className = "lcm-kv-inline";
+    introValue.textContent = `${d.messagesCount || 0} 条，${fmt(inputMsgTokens)} token`;
+    intro.appendChild(introLabel);
+    intro.appendChild(introValue);
+    section.appendChild(intro);
     const meta = document.createElement("div");
     meta.className = "lcm-kv";
     const estRow = document.createElement("div"); estRow.className = "lcm-kv";
     const estL = document.createElement("span"); estL.className = "lcm-kv-label"; estL.textContent = "inputTokenEstimate";
-    const estV = document.createElement("span"); estV.className = "lcm-kv-value"; estV.textContent = fmt(d.inputTokenEstimate) + " (含开销)";
+    const estV = document.createElement("span"); estV.className = "lcm-kv-inline"; estV.textContent = fmt(d.inputTokenEstimate) + " (含开销)";
     estRow.appendChild(estL); estRow.appendChild(estV); section.appendChild(estRow);
     const ml = document.createElement("span"); ml.className = "lcm-kv-label"; ml.textContent = "tokenBudget";
-    const mv = document.createElement("span"); mv.className = "lcm-kv-value"; mv.textContent = fmt(d.tokenBudget);
+    const mv = document.createElement("span"); mv.className = "lcm-kv-inline"; mv.textContent = fmt(d.tokenBudget);
     meta.appendChild(ml); meta.appendChild(mv);
     section.appendChild(meta);
     if (d.hasSummaryItems) {
       const m2 = document.createElement("div"); m2.className = "lcm-kv";
       const m2l = document.createElement("span"); m2l.className = "lcm-kv-label"; m2l.textContent = "\u542b\u6458\u8981";
-      const m2v = document.createElement("span"); m2v.className = "lcm-kv-value"; m2v.textContent = "\u662f";
+      const m2v = document.createElement("span"); m2v.className = "lcm-kv-inline"; m2v.textContent = "\u662f";
       m2.appendChild(m2l); m2.appendChild(m2v); section.appendChild(m2);
     }
     const msgs = d.messages || [];
-    if (msgs.length > 0) section.appendChild(renderAssembleMsgList(msgs));
-    body.appendChild(section);
+    if (msgs.length > 0) {
+      section.appendChild(renderMessageDetails(`展开详情 (${msgs.length} 条消息)`, msgs));
+    }
+    lcmBody.appendChild(section);
   }
 
   if (contextEntry) {
     const d = contextEntry.data || {};
-    const section = document.createElement("details");
-    section.className = "lcm-messages-section";
+    const section = renderAssembleSection("上下文组装");
     const sc = d.summaryCount||0, rc = d.rawMessageCount||0, fc = d.freshTailCount||0;
-    const sum = document.createElement("summary");
     const asmMsgs = d.assembledMessages || [];
     const asmTokSum = asmMsgs.reduce((s, m) => s + (m.tokens || 0), 0);
-    sum.textContent = "\u{1f527} LCM \u7ec4\u88c5\u7ed3\u679c\uff08raw=" + rc + ", summaries=" + sc + ", freshTail=" + fc + ", " + fmt(asmTokSum) + " tok\uff09";
-    section.appendChild(sum);
+    const intro = document.createElement("div");
+    intro.className = "lcm-kv";
+    const introLabel = document.createElement("span");
+    introLabel.className = "lcm-kv-label";
+    introLabel.textContent = "组装结果";
+    const introValue = document.createElement("span");
+    introValue.className = "lcm-kv-inline";
+    introValue.textContent = `raw=${rc}, summaries=${sc}, freshTail=${fc}, ${fmt(asmTokSum)} token`;
+    intro.appendChild(introLabel);
+    intro.appendChild(introValue);
+    section.appendChild(intro);
     const kvs = [
       ["\u539f\u59cb\u6d88\u606f", rc], ["\u6458\u8981\u6761\u6570", sc],
       ["\u4fdd\u62a4\u5c3e\u90e8", fc], ["\u5c3e\u90e8 tokens", fmt(d.tailTokens)],
@@ -891,7 +1252,7 @@ function renderAssembleCard(assembleEntries) {
     for (const [k, v] of kvs) {
       const row = document.createElement("div"); row.className = "lcm-kv";
       const rl = document.createElement("span"); rl.className = "lcm-kv-label"; rl.textContent = k;
-      const rv = document.createElement("span"); rv.className = "lcm-kv-value"; rv.textContent = String(v??"");
+      const rv = document.createElement("span"); rv.className = "lcm-kv-inline"; rv.textContent = String(v??"");
       row.appendChild(rl); row.appendChild(rv); section.appendChild(row);
     }
     if (d.systemPromptAddition) {
@@ -908,24 +1269,33 @@ function renderAssembleCard(assembleEntries) {
       section.appendChild(spRow);
     }
     const asm = d.assembledMessages || [];
-    if (asm.length > 0) section.appendChild(renderAssembleMsgList(asm));
-    body.appendChild(section);
+    if (asm.length > 0) {
+      section.appendChild(renderMessageDetails(`展开详情 (${asm.length} 条消息)`, asm));
+    }
+    lcmBody.appendChild(section);
   }
 
   if (outputEntry) {
     const d = outputEntry.data || {};
-    const section = document.createElement("details");
-    section.className = "lcm-messages-section";
-    const sum = document.createElement("summary");
+    const section = renderAssembleSection("最终输出");
     const sysPrompt = d.systemPromptAddition;
     const outMsgs = d.messages || [];
     const outTokSum = outMsgs.reduce((s, m) => s + (m.tokens || 0), 0);
-    sum.textContent = "\u{1f4e4} \u7ec4\u88c5\u8f93\u51fa\uff08" + (d.outputMessagesCount||0) + " \u6761\uff0c" + fmt(outTokSum) + " tok\uff09";
-    section.appendChild(sum);
+    const intro = document.createElement("div");
+    intro.className = "lcm-kv";
+    const introLabel = document.createElement("span");
+    introLabel.className = "lcm-kv-label";
+    introLabel.textContent = "输出消息";
+    const introValue = document.createElement("span");
+    introValue.className = "lcm-kv-inline";
+    introValue.textContent = `${d.outputMessagesCount || 0} 条，${fmt(outTokSum)} token`;
+    intro.appendChild(introLabel);
+    intro.appendChild(introValue);
+    section.appendChild(intro);
     if (d.estimatedTokens) {
       const etRow = document.createElement("div"); etRow.className = "lcm-kv";
       const etL = document.createElement("span"); etL.className = "lcm-kv-label"; etL.textContent = "estimatedTokens";
-      const etV = document.createElement("span"); etV.className = "lcm-kv-value"; etV.textContent = fmt(d.estimatedTokens) + " (\u6570 content JSON)";
+      const etV = document.createElement("span"); etV.className = "lcm-kv-inline"; etV.textContent = fmt(d.estimatedTokens) + " (\u6570 content JSON)";
       etRow.appendChild(etL); etRow.appendChild(etV); section.appendChild(etRow);
     }
     const saved = d.tokensSaved || 0;
@@ -949,10 +1319,13 @@ function renderAssembleCard(assembleEntries) {
       section.appendChild(spRow);
     }
     const msgs = d.messages || [];
-    if (msgs.length > 0) section.appendChild(renderAssembleMsgList(msgs));
-    body.appendChild(section);
+    if (msgs.length > 0) {
+      section.appendChild(renderMessageDetails(`展开详情 (${msgs.length} 条消息)`, msgs));
+    }
+    lcmBody.appendChild(section);
   }
 
+  body.appendChild(lcmBody);
   card.appendChild(body);
   return card;
 }
@@ -999,7 +1372,7 @@ function renderIngestBatchCard(entries) {
     roleEl.textContent = d.role || "?";
     const tokEl = document.createElement("span");
     tokEl.className = "lcm-msg-tokens";
-    tokEl.textContent = `seq=${d.seq || "?"} ${fmt(d.tokenCount)} tok`;
+    tokEl.textContent = `seq=${d.seq || "?"} ${fmt(d.tokenCount)} token`;
     const textEl = document.createElement("div");
     textEl.className = "lcm-msg-text";
     textEl.textContent = d.contentPreview || "(empty)";
@@ -1021,7 +1394,7 @@ function renderLcmAsCard(entry) {
   return card;
 }
 
-function renderRound(roundBlocks, roundIndex, traceIdx) {
+function renderRound(roundBlocks, roundIndex, traceIdx, engineActions = [], engine = null) {
   const container = document.createElement("section");
   container.className = "round";
 
@@ -1055,15 +1428,15 @@ function renderRound(roundBlocks, roundIndex, traceIdx) {
     }
   }
 
-  const timeline = [];
+  const orderedBlocks = [];
 
   if (userBlock) {
-    timeline.push({ type: "http", block: userBlock });
+    orderedBlocks.push(userBlock);
   }
 
   for (const block of allBlocks) {
     if (block.direction === "gateway->ui") continue;
-    timeline.push({ type: "http", block });
+    orderedBlocks.push(block);
   }
 
   let outputBlock = roundBlocks[roundBlocks.length - 1]?.direction === "gateway->ui"
@@ -1081,14 +1454,38 @@ function renderRound(roundBlocks, roundIndex, traceIdx) {
     }
   }
   if (outputBlock) {
-    timeline.push({ type: "http", block: outputBlock });
+    orderedBlocks.push(outputBlock);
   }
+
+  const timeline = orderedBlocks.map((block, index) => ({
+    type: "http",
+    block,
+    sortKey: index,
+  }));
+
+  for (const section of engineActions) {
+    timeline.push({
+      type: "engine",
+      section,
+      sortKey: anchorSortKeyForSection(section, orderedBlocks),
+    });
+  }
+
+  timeline.sort((a, b) => {
+    if (a.sortKey !== b.sortKey) return a.sortKey - b.sortKey;
+    return 0;
+  });
 
   for (let i = 0; i < timeline.length; i++) {
     const item = timeline[i];
-    const summary = buildBlockSummary(item.block);
-    const isMiddle = item.block.direction !== "user->gateway" && item.block.direction !== "gateway->ui";
-    container.appendChild(renderBlockCard(summary, isMiddle));
+    const isMiddle = item.type === "engine"
+      ? true
+      : item.block.direction !== "user->gateway" && item.block.direction !== "gateway->ui";
+    container.appendChild(
+      item.type === "engine"
+        ? renderEngineActionCard(item.section, engine, isMiddle)
+        : renderBlockCard(buildBlockSummary(item.block), isMiddle)
+    );
     if (i < timeline.length - 1) {
       container.appendChild(renderInternalArrow());
     }
@@ -1123,13 +1520,76 @@ function isLcmInternalTrace(trace) {
   return false;
 }
 
+const HEARTBEAT_MARKERS = [
+  "Read HEARTBEAT.md if it exists (workspace context).",
+  "Read HEARTBEAT.md if it exists",
+];
+
+function textHasHeartbeatMarker(text) {
+  if (typeof text !== "string" || !text) return false;
+  return HEARTBEAT_MARKERS.some(marker => text.includes(marker));
+}
+
+function extractHeartbeatCandidateTexts(payload) {
+  const texts = [];
+  if (!isObj(payload)) return texts;
+
+  if (typeof payload.input === "string" && payload.input) texts.push(payload.input);
+  if (typeof payload.prompt === "string" && payload.prompt) texts.push(payload.prompt);
+  if (typeof payload.text === "string" && payload.text) texts.push(payload.text);
+
+  if (Array.isArray(payload.messages)) {
+    for (const msg of payload.messages) {
+      if (!isObj(msg)) continue;
+      if (msg.role !== "user") continue;
+      const text = extractTextFromContent(msg.content);
+      if (text) texts.push(text);
+    }
+  }
+
+  return texts;
+}
+
+function payloadIsHeartbeatRequest(payload) {
+  const texts = extractHeartbeatCandidateTexts(payload);
+  if (texts.length === 0) return false;
+  return texts.every(text => textHasHeartbeatMarker(text));
+}
+
+function eventIsHeartbeatInternal(event) {
+  if (!isObj(event)) return false;
+  const direction = event.direction;
+  if (direction === "gateway->model") {
+    return payloadIsHeartbeatRequest(event.payload_full);
+  }
+  return false;
+}
+
+function blockIsHeartbeatInternal(block) {
+  if (!isObj(block) || !Array.isArray(block.events) || block.events.length === 0) return false;
+  return block.events.every(event => eventIsHeartbeatInternal(event));
+}
+
 function buildVisibleTimeline(timeline) {
   const ordered = [...timeline].sort((a, b) => {
     const tsA = typeof a?.start_ts === "number" ? a.start_ts : 0;
     const tsB = typeof b?.start_ts === "number" ? b.start_ts : 0;
     return tsB - tsA;
   });
-  if (ordered.length > 0) return { list: ordered, note: `共 ${ordered.length} 条会话` };
+  const visible = ordered.filter(item => item?.is_heartbeat_internal !== true);
+  if (visible.length > 0) {
+    const hiddenCount = ordered.length - visible.length;
+    const note = hiddenCount > 0
+      ? `共 ${visible.length} 条会话，已隐藏 ${hiddenCount} 条 HEARTBEAT 内部轮次`
+      : `共 ${visible.length} 条会话`;
+    return { list: visible, note };
+  }
+  if (ordered.length > 0) {
+    return {
+      list: [],
+      note: `共 ${ordered.length} 条会话，已隐藏 ${ordered.length} 条 HEARTBEAT 内部轮次`,
+    };
+  }
   return { list: [], note: "暂无会话数据。" };
 }
 
@@ -1231,10 +1691,12 @@ function mergeAdjacentTraces(traces) {
 function renderSingleTrace(container, trace, roundOffset, traceIdx) {
   const events = Array.isArray(trace?.common?.events) ? trace.common.events : trace?.events;
   if (!isObj(trace) || !Array.isArray(events) || events.length === 0) return 0;
-  const blocks = groupIntoBlocks(events);
+  const blocks = groupIntoBlocks(events).filter(block => !blockIsHeartbeatInternal(block));
+  if (blocks.length === 0) return 0;
   const rounds = groupBlocksIntoRounds(blocks);
+  const engineActionsByRound = assignEngineActionsToRounds(rounds, actionEngineSections(trace));
   for (let i = 0; i < rounds.length; i++) {
-    container.appendChild(renderRound(rounds[i], roundOffset + i, traceIdx));
+    container.appendChild(renderRound(rounds[i], roundOffset + i, traceIdx, engineActionsByRound[i], trace?.engine));
   }
   return rounds.length;
 }
@@ -1282,7 +1744,7 @@ function renderEngineDiagnostics() {
   if (state.showAllMode) {
     const empty = document.createElement("div");
     empty.className = "panel-empty";
-    empty.textContent = "全量视图下不展示 engine 专属诊断，请选择单条 trace 查看。";
+    empty.textContent = "全量视图下不展示 Context Engine 专属诊断，请选择单条 trace 查看。";
     container.appendChild(empty);
     return;
   }
@@ -1292,7 +1754,7 @@ function renderEngineDiagnostics() {
   if (!isObj(trace) || !isObj(engine)) {
     const empty = document.createElement("div");
     empty.className = "panel-empty";
-    empty.textContent = "请选择左侧会话查看 engine 诊断。";
+    empty.textContent = "请选择左侧会话查看 Context Engine 诊断。";
     container.appendChild(empty);
     return;
   }
@@ -1301,7 +1763,7 @@ function renderEngineDiagnostics() {
   header.className = "engine-panel-header";
   const title = document.createElement("h3");
   title.className = "engine-panel-title";
-  title.textContent = `Engine 诊断 · ${engineBadgeText(engine.id, engine.label)}`;
+  title.textContent = `Context Engine 补充信息 · ${engineBadgeText(engine.id, engine.label)}`;
   header.appendChild(title);
   const summary = document.createElement("div");
   summary.className = "engine-summary";
@@ -1317,13 +1779,13 @@ function renderEngineDiagnostics() {
   header.appendChild(summary);
   container.appendChild(header);
 
-  const sections = Array.isArray(engine.sections) ? engine.sections : [];
+  const sections = supplementalEngineSections(trace);
   if (sections.length === 0) {
     const empty = document.createElement("div");
     empty.className = "panel-empty";
     empty.textContent = engine.id === "unknown"
-      ? "当前 trace 没有匹配到专属 context engine 诊断，仍可查看上方通用链路。"
-      : "当前 trace 已识别到 engine，但没有捕获到可展示的专属诊断。";
+      ? "当前 trace 没有匹配到专属 Context Engine 诊断，仍可查看上方通用链路。"
+      : "动作类 Context Engine 诊断已并入上方主时序，当前没有额外补充信息。";
     container.appendChild(empty);
     return;
   }
@@ -1496,11 +1958,11 @@ async function showAllTraces() {
     metaContainer.replaceChildren();
     const pill = document.createElement("span");
     pill.className = "meta-pill";
-    pill.textContent = `全量视图: ${state.visibleTimeline.length} 条 trace`;
+    pill.textContent = `全量视图: ${state.timeline.length} 条 trace`;
     metaContainer.appendChild(pill);
   }
 
-  const sorted = [...state.visibleTimeline].sort((a, b) => {
+  const sorted = [...state.timeline].sort((a, b) => {
     const tsA = typeof a?.start_ts === "number" ? a.start_ts : 0;
     const tsB = typeof b?.start_ts === "number" ? b.start_ts : 0;
     return tsA - tsB;
