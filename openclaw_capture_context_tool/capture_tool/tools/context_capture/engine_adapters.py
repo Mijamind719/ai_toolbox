@@ -78,6 +78,17 @@ OPENVIKING_INJECT_COUNT_RE = re.compile(r"openviking:\s+injecting\s+(?P<count>\d
 OPENVIKING_AUTOCAPTURE_RE = re.compile(
     r"openviking:\s+auto-captured\s+(?P<captured>\d+)\s+new messages,\s+extracted\s+(?P<extracted>\d+)\s+memories"
 )
+OPENVIKING_PRE_STAGES = {
+    "recall_precheck",
+    "recall_search",
+    "recall_inject",
+    "recall_error",
+    "ingest_reply_assist",
+    "assemble_input",
+    "context_assemble",
+    "assemble_output",
+    "assemble_error",
+}
 
 
 def _parse_ts_millis(value: Any) -> int | None:
@@ -158,8 +169,34 @@ def _gateway_log_path(data_dir: Path) -> Path | None:
     return local if local.exists() else None
 
 
+def _get_openviking_path() -> Path:
+    configured = os.environ.get("OPENVIKING_DIAGNOSTICS_PATH", "").strip()
+    if configured:
+        return Path(os.path.expanduser(configured))
+    return Path.home() / ".openclaw" / "openviking-diagnostics.jsonl"
+
+
 def _load_lcm_entries() -> list[dict[str, Any]]:
     path = _get_lcm_path()
+    if not path.exists():
+        return []
+
+    entries: list[dict[str, Any]] = []
+    try:
+        for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            raw_line = raw_line.strip()
+            if not raw_line:
+                continue
+            parsed = _safe_json_loads(raw_line)
+            if isinstance(parsed, dict):
+                entries.append(parsed)
+    except OSError:
+        return []
+    return entries
+
+
+def _load_openviking_entries() -> list[dict[str, Any]]:
+    path = _get_openviking_path()
     if not path.exists():
         return []
 
@@ -223,6 +260,7 @@ def _load_http_flows(data_dir: Path) -> list[dict[str, Any]]:
 def load_diagnostics_context(data_dir: Path) -> dict[str, Any]:
     return {
         "lcm_entries": _load_lcm_entries(),
+        "openviking_entries": _load_openviking_entries(),
         "gateway_records": _load_gateway_records(data_dir),
         "http_flows": _load_http_flows(data_dir),
     }
@@ -337,6 +375,28 @@ def _matching_openviking_records(
         )
     )
     return matched_logs, matched_flows
+
+
+def _matching_openviking_entries(
+    trace: dict[str, Any],
+    *,
+    openviking_entries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    start_ts, end_ts = _trace_window(trace)
+    if start_ts is None or end_ts is None:
+        return []
+
+    matched: list[dict[str, Any]] = []
+    for entry in openviking_entries:
+        ts = entry.get("ts")
+        if not isinstance(ts, (int, float)):
+            continue
+        stage = entry.get("stage")
+        pre_ms = 12_000 if stage in OPENVIKING_PRE_STAGES else 5_000
+        post_ms = 8_000 if stage in OPENVIKING_PRE_STAGES else 20_000
+        if _ts_in_window(int(ts), start_ts, end_ts, pre_ms=pre_ms, post_ms=post_ms):
+            matched.append(entry)
+    return sorted(matched, key=lambda item: int(item.get("ts", 0)))
 
 
 def _is_openviking_url(url: str) -> bool:
@@ -684,6 +744,129 @@ def _build_openviking_sections(logs: list[dict[str, Any]], flows: list[dict[str,
     return sections
 
 
+def _build_openviking_sections_from_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    sections: list[dict[str, Any]] = []
+    section_specs = (
+        ("recall", "recall", "OpenViking Recall", {"recall_precheck", "recall_search", "recall_inject", "recall_error"}),
+        ("assemble", "assemble", "Context Assemble", {"assemble_input", "context_assemble", "assemble_output", "assemble_error"}),
+        ("capture", "capture", "OpenViking Capture", {"afterTurn_entry", "capture_store", "capture_check", "capture_commit", "capture_skip", "capture_error"}),
+        ("assist", "summary", "OpenViking Reply Assist", {"ingest_reply_assist"}),
+    )
+
+    for _section_id, kind, title, stages in section_specs:
+        section_entries = [entry for entry in entries if entry.get("stage") in stages]
+        if not section_entries:
+            continue
+
+        stats: list[dict[str, Any]] = [_stat("诊断条目", len(section_entries))]
+        items: list[dict[str, Any]] = []
+        raw_refs: list[dict[str, Any]] = []
+        for entry in section_entries:
+            stage = str(entry.get("stage") or "")
+            data = entry.get("data") or {}
+            if stage == "recall_precheck":
+                items.append(_item("Recall Precheck", f"query={data.get('queryPreview') or '-'}, ok={data.get('ok')}, reason={data.get('reason') or '-'}"))
+            elif stage == "recall_search":
+                items.append(
+                    _item(
+                        "Recall Search",
+                        f"user={data.get('userResultCount') or 0}, agent={data.get('agentResultCount') or 0}, merged={data.get('mergedCount') or 0}, selected={data.get('selectedCount') or 0}",
+                    )
+                )
+                if data.get("selectedCount") is not None:
+                    stats.append(_stat("选中条数", data.get("selectedCount")))
+            elif stage == "recall_inject":
+                items.append(
+                    _item(
+                        "Recall Inject",
+                        f"count={data.get('injectedCount') or 0}, estimatedTokens={data.get('estimatedTokens') or 0}, budget={data.get('recallTokenBudget') or 0}",
+                    )
+                )
+                memories = data.get("memories")
+                if isinstance(memories, list) and memories:
+                    raw_refs.append(_raw_ref("recall memories", memories))
+            elif stage == "assemble_input":
+                items.append(
+                    _item(
+                        "原始消息输入",
+                        f"消息数={data.get('messagesCount') or 0}, 输入tokens={data.get('inputTokenEstimate') or 0}, budget={data.get('tokenBudget') or 0}",
+                    )
+                )
+            elif stage == "context_assemble":
+                items.append(
+                    _item(
+                        "上下文组装",
+                        f"archives={data.get('archiveCount') or 0}, active={data.get('activeCount') or 0}, output={data.get('assembledMessagesCount') or 0}, passthrough={bool(data.get('passthrough'))}",
+                    )
+                )
+            elif stage == "assemble_output":
+                items.append(
+                    _item(
+                        "最终输出",
+                        f"输出消息={data.get('outputMessagesCount') or 0}, estimatedTokens={data.get('estimatedTokens') or 0}, input={data.get('inputTokenEstimate') or 0}",
+                    )
+                )
+            elif stage == "afterTurn_entry":
+                items.append(
+                    _item(
+                        "afterTurn",
+                        f"总消息={data.get('totalMessages') or 0}, 新消息={data.get('newMessageCount') or 0}, prePrompt={data.get('prePromptMessageCount') or 0}",
+                    )
+                )
+            elif stage == "capture_store":
+                items.append(
+                    _item(
+                        "Capture Store",
+                        f"stored={bool(data.get('stored'))}, chars={data.get('chars') or 0}, text={_preview_text(data.get('sanitizedPreview') or data.get('turnTextPreview') or '')}",
+                    )
+                )
+            elif stage == "capture_check":
+                items.append(
+                    _item(
+                        "Capture Decision",
+                        f"shouldCapture={data.get('shouldCapture')}, reason={data.get('reason') or '-'}, mode={data.get('captureMode') or '-'}",
+                        tone="warning" if data.get("shouldCapture") is False else None,
+                    )
+                )
+            elif stage == "capture_commit":
+                items.append(
+                    _item(
+                        "Capture Commit",
+                        f"status={data.get('status') or '-'}, archived={data.get('archived')}, pendingTokens={data.get('pendingTokens') or 0}, extracted={data.get('extractedMemories') or 0}",
+                    )
+                )
+                if data.get("extractedMemories") is not None:
+                    stats.append(_stat("提取 memories", data.get("extractedMemories")))
+            elif stage == "capture_skip":
+                items.append(_item("Capture Skip", data.get("reason") or "-", tone="warning"))
+            elif stage == "ingest_reply_assist":
+                items.append(
+                    _item(
+                        "Reply Assist",
+                        f"applied={data.get('applied')}, reason={data.get('reason') or '-'}, speakerTurns={data.get('speakerTurns') or 0}, chars={data.get('chars') or 0}",
+                    )
+                )
+            else:
+                items.append(_item(stage, _preview_text(data or entry), tone="warning" if stage.endswith("_error") else None))
+
+        for entry in section_entries[:6]:
+            raw_refs.append(_raw_ref(str(entry.get("stage") or "entry"), entry))
+
+        sections.append(
+            {
+                "kind": kind,
+                "title": title,
+                "started_at": section_entries[0].get("ts"),
+                "ended_at": section_entries[-1].get("ts"),
+                "stats": stats,
+                "items": items,
+                "raw_refs": raw_refs,
+            }
+        )
+
+    return sections
+
+
 def build_engine_payload(trace: dict[str, Any], *, context: dict[str, Any]) -> dict[str, Any]:
     lcm_entries = _matching_lcm_entries(trace, lcm_entries=context.get("lcm_entries") or [])
     if lcm_entries:
@@ -698,17 +881,23 @@ def build_engine_payload(trace: dict[str, Any], *, context: dict[str, Any]) -> d
             "sections": sections,
         }
 
+    openviking_entries = _matching_openviking_entries(trace, openviking_entries=context.get("openviking_entries") or [])
     openviking_logs, openviking_flows = _matching_openviking_records(
         trace,
         gateway_records=context.get("gateway_records") or [],
         http_flows=context.get("http_flows") or [],
     )
-    if openviking_logs or openviking_flows:
-        sections = _build_openviking_sections(openviking_logs, openviking_flows)
+    if openviking_entries or openviking_logs or openviking_flows:
+        sections = (
+            _build_openviking_sections_from_entries(openviking_entries)
+            if openviking_entries
+            else _build_openviking_sections(openviking_logs, openviking_flows)
+        )
         return {
             "id": "openviking",
             "label": "OpenViking",
             "summary": [
+                _stat("诊断条目", len(openviking_entries)),
                 _stat("gateway 日志", len(openviking_logs)),
                 _stat("HTTP 流量", len(openviking_flows)),
                 _stat("section 数", len(sections)),

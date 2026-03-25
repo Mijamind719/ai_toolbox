@@ -44,12 +44,17 @@ def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
 class EngineAdapterTests(unittest.TestCase):
     def setUp(self) -> None:
         self._old_lcm_path = os.environ.get("LCM_DIAGNOSTICS_PATH")
+        self._old_openviking_path = os.environ.get("OPENVIKING_DIAGNOSTICS_PATH")
 
     def tearDown(self) -> None:
         if self._old_lcm_path is None:
             os.environ.pop("LCM_DIAGNOSTICS_PATH", None)
         else:
             os.environ["LCM_DIAGNOSTICS_PATH"] = self._old_lcm_path
+        if self._old_openviking_path is None:
+            os.environ.pop("OPENVIKING_DIAGNOSTICS_PATH", None)
+        else:
+            os.environ["OPENVIKING_DIAGNOSTICS_PATH"] = self._old_openviking_path
 
     def test_build_engine_payload_detects_lossless_claw(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -80,6 +85,7 @@ class EngineAdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             os.environ["LCM_DIAGNOSTICS_PATH"] = str(root / "missing-lcm.jsonl")
+            os.environ["OPENVIKING_DIAGNOSTICS_PATH"] = str(root / "missing-openviking.jsonl")
             data_dir = root / "capture"
             data_dir.mkdir()
 
@@ -146,6 +152,104 @@ class EngineAdapterTests(unittest.TestCase):
             self.assertIn("capture", kinds)
             recall_section = next(section for section in payload["sections"] if section["kind"] == "recall")
             self.assertTrue(any("query=rust" in item["value"] for item in recall_section["items"]))
+
+    def test_build_engine_payload_prefers_openviking_diagnostics_jsonl(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            os.environ["LCM_DIAGNOSTICS_PATH"] = str(root / "missing-lcm.jsonl")
+            ov_path = root / "openviking-diagnostics.jsonl"
+            os.environ["OPENVIKING_DIAGNOSTICS_PATH"] = str(ov_path)
+            _write_jsonl(
+                ov_path,
+                [
+                    {
+                        "ts": 1_774_627_200_000,
+                        "sessionId": "session-1",
+                        "stage": "recall_precheck",
+                        "data": {"queryPreview": "rust", "ok": True, "reason": None},
+                    },
+                    {
+                        "ts": 1_774_627_200_120,
+                        "sessionId": "session-1",
+                        "stage": "recall_search",
+                        "data": {
+                            "userResultCount": 1,
+                            "agentResultCount": 0,
+                            "mergedCount": 1,
+                            "selectedCount": 1,
+                        },
+                    },
+                    {
+                        "ts": 1_774_627_200_220,
+                        "sessionId": "session-1",
+                        "stage": "recall_inject",
+                        "data": {
+                            "injectedCount": 1,
+                            "estimatedTokens": 42,
+                            "recallTokenBudget": 2000,
+                            "memories": [{"uri": "viking://user/default/memories/1"}],
+                        },
+                    },
+                    {
+                        "ts": 1_774_627_200_320,
+                        "sessionId": "session-1",
+                        "stage": "assemble_input",
+                        "data": {
+                            "messagesCount": 2,
+                            "inputTokenEstimate": 111,
+                            "tokenBudget": 256000,
+                        },
+                    },
+                    {
+                        "ts": 1_774_627_200_420,
+                        "sessionId": "session-1",
+                        "stage": "context_assemble",
+                        "data": {
+                            "archiveCount": 1,
+                            "activeCount": 2,
+                            "assembledMessagesCount": 3,
+                            "passthrough": False,
+                        },
+                    },
+                    {
+                        "ts": 1_774_627_201_100,
+                        "sessionId": "session-1",
+                        "stage": "afterTurn_entry",
+                        "data": {
+                            "totalMessages": 4,
+                            "prePromptMessageCount": 2,
+                            "newMessageCount": 2,
+                        },
+                    },
+                    {
+                        "ts": 1_774_627_201_220,
+                        "sessionId": "session-1",
+                        "stage": "capture_commit",
+                        "data": {
+                            "status": "accepted",
+                            "archived": True,
+                            "pendingTokens": 240,
+                            "extractedMemories": 1,
+                        },
+                    },
+                ],
+            )
+
+            data_dir = root / "capture"
+            data_dir.mkdir()
+            context = load_diagnostics_context(data_dir)
+            payload = build_engine_payload(
+                _make_trace(1_774_627_200_050, 1_774_627_201_500, user_text="remember rust"),
+                context=context,
+            )
+
+            self.assertEqual(payload["id"], "openviking")
+            kinds = [section["kind"] for section in payload["sections"]]
+            self.assertIn("recall", kinds)
+            self.assertIn("assemble", kinds)
+            self.assertIn("capture", kinds)
+            assemble_section = next(section for section in payload["sections"] if section["kind"] == "assemble")
+            self.assertTrue(any("消息数=2" in item["value"] for item in assemble_section["items"]))
 
     def test_extract_trace_preview_prefers_user_text(self) -> None:
         preview = extract_trace_preview(_make_trace(100, 200, user_text="please remember my preferred language is rust"))

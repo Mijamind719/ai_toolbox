@@ -14,7 +14,14 @@ KEY_PRIORITY: tuple[tuple[str, str], ...] = (
     ("request_id", "medium"),
     ("idempotency_key", "low"),
 )
-MODEL_RESPONSE_EVENT_TYPES = {"model_delta", "model_final", "ui_delta", "ui_final"}
+MODEL_RESPONSE_EVENT_TYPES = {
+    "model_delta",
+    "model_final",
+    "model_response_internal",
+    "model_response_json",
+    "ui_delta",
+    "ui_final",
+}
 
 
 def _extract_key(event: EventRecord) -> tuple[str, str] | None:
