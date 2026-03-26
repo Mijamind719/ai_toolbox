@@ -612,22 +612,16 @@ function buildEngineActionSummary(section, engine) {
 function renderEngineActionCard(section, engine, compact) {
   if (section?.kind === "assemble") {
     const entries = parseSectionRawEntries(section);
-    const hasAssembleStages = entries.some(entry => {
-      const stage = entry?.stage;
-      return stage === "assemble_input" || stage === "context_assemble" || stage === "assemble_output";
-    });
-    if (hasAssembleStages) {
+    const ASSEMBLE_STAGES = new Set(["assemble_entry", "assemble_result", "assemble_error", "assemble_input", "context_assemble", "assemble_output"]);
+    if (entries.some(e => ASSEMBLE_STAGES.has(e?.stage))) {
       return renderAssembleCard(entries, engine);
     }
   }
 
   if (section?.kind === "capture") {
     const entries = parseSectionRawEntries(section);
-    const hasCaptureStages = entries.some(entry => {
-      const stage = entry?.stage;
-      return stage === "afterTurn_entry" || stage === "capture_store" || stage === "capture_skip" || stage === "capture_commit";
-    });
-    if (hasCaptureStages) {
+    const CAPTURE_STAGES = new Set(["afterTurn_entry", "afterTurn_skip", "afterTurn_commit", "afterTurn_error", "capture_store", "capture_skip", "capture_commit"]);
+    if (entries.some(e => CAPTURE_STAGES.has(e?.stage))) {
       return renderCaptureCard(entries, engine);
     }
   }
@@ -1150,45 +1144,56 @@ function renderCaptureCard(captureEntries, engine) {
   body.appendChild(metaRow);
 
   const entryData = captureEntries.find(e => e.stage === "afterTurn_entry");
+  const skipData = captureEntries.find(e => e.stage === "afterTurn_skip" || e.stage === "capture_skip");
+  const commitData = captureEntries.find(e => e.stage === "afterTurn_commit" || e.stage === "capture_commit");
+  const errorData = captureEntries.find(e => e.stage === "afterTurn_error");
   const storeData = captureEntries.find(e => e.stage === "capture_store");
-  const skipData = captureEntries.find(e => e.stage === "capture_skip");
-  const commitData = captureEntries.find(e => e.stage === "capture_commit");
 
-  const sessionId = entryData?.sessionId || storeData?.sessionId || "";
+  const sessionId = entryData?.sessionId || skipData?.sessionId || commitData?.sessionId || errorData?.sessionId || "";
   const ed = entryData?.data || {};
-  const sd = storeData?.data || {};
   const skd = skipData?.data || {};
   const cd = commitData?.data || {};
+  const erd = errorData?.data || {};
 
   const pendingTokens = skd.pendingTokens || cd.pendingTokens || 0;
   const threshold = skd.commitTokenThreshold || cd.commitTokenThreshold || 0;
-  const committed = !!commitData;
-  const archived = cd.archived || false;
+  const skipReason = skd.reason || "";
+  const isEarlySkip = skipReason === "no_messages" || skipReason === "no_new_turn_messages" || skipReason === "sanitized_empty";
 
   const sumPanel = document.createElement("div");
   sumPanel.className = "lcm-assemble-summary";
-  const kvs = [
-    ["Session", sessionId || "(unknown)"],
-    ["\u538b\u7f29\u9608\u503c", fmt(threshold) + " tokens"],
-    ["\u65b0\u589e\u6d88\u606f", (ed.newMessageCount || 0) + " \u6761\uff0c~" + fmt(ed.newTurnTokens || 0) + " tokens"],
-    ["\u7d2f\u79ef tokens", fmt(pendingTokens) + "/" + fmt(threshold) + (threshold > 0 ? " (\u5dee " + fmt(threshold - pendingTokens) + ")" : "")],
-  ];
-  if (committed) {
-    kvs.push(["\u662f\u5426\u538b\u7f29", "\u662f (archived=" + (archived ? "\u662f" : "\u5426") + ", status=" + (cd.status || "?") + ")"]);
-  } else if (skipData) {
-    kvs.push(["\u662f\u5426\u538b\u7f29", "\u5426 (\u4f4e\u4e8e\u9608\u503c)"]);
+  const kvs = [["Session", sessionId || "(unknown)"]];
+
+  if (isEarlySkip) {
+    kvs.push(["\u26a0 \u8df3\u8fc7", skipReason]);
+    if (skd.totalMessages != null) kvs.push(["\u603b\u6d88\u606f\u6570", skd.totalMessages]);
+  } else if (entryData) {
+    kvs.push(["\u65b0\u589e\u6d88\u606f", (ed.newMessageCount || 0) + " \u6761"]);
+    if (commitData) {
+      kvs.push(["\u7d2f\u79ef tokens", fmt(pendingTokens) + "/" + fmt(threshold) + " (\u8d85\u9608\u503c)"]);
+      kvs.push(["\u662f\u5426\u63d0\u4ea4", "\u662f (archived=" + (cd.archived ? "\u662f" : "\u5426") + ", status=" + (cd.status || "?") + ")"]);
+    } else if (skipData && !isEarlySkip) {
+      kvs.push(["\u7d2f\u79ef tokens", fmt(pendingTokens) + "/" + fmt(threshold) + (threshold > 0 ? " (\u5dee " + fmt(threshold - pendingTokens) + ")" : "")]);
+      kvs.push(["\u662f\u5426\u63d0\u4ea4", "\u5426 (\u4f4e\u4e8e\u9608\u503c)"]);
+    }
   }
-  if (sd.stored === false) {
-    kvs.push(["addMessage", "\u8df3\u8fc7 (" + (sd.reason || "empty") + ")"]);
-  } else if (sd.stored === true) {
-    kvs.push(["addMessage", "\u5df2\u5b58\u50a8 (" + fmt(sd.chars || 0) + " chars)"]);
+
+  if (storeData) {
+    const sd = storeData.data || {};
+    if (sd.stored === true) kvs.push(["addMessage", "\u5df2\u5b58\u50a8 (" + fmt(sd.chars || 0) + " chars)"]);
+    else if (sd.stored === false) kvs.push(["addMessage", "\u8df3\u8fc7 (" + (sd.reason || "empty") + ")"]);
+  }
+
+  if (errorData) {
+    kvs.push(["\u26a0 \u9519\u8bef", erd.error || "unknown"]);
   }
 
   for (const [k, v] of kvs) {
     const row = document.createElement("div");
     row.className = "lcm-kv";
     const rl = document.createElement("span"); rl.className = "lcm-kv-label"; rl.textContent = k;
-    const rv = document.createElement("span"); rv.className = "lcm-kv-inline"; rv.textContent = v;
+    const isWarn = k.startsWith("\u26a0");
+    const rv = document.createElement("span"); rv.className = "lcm-kv-inline" + (isWarn ? " lcm-saving" : ""); rv.textContent = v;
     row.appendChild(rl); row.appendChild(rv); sumPanel.appendChild(row);
   }
   body.appendChild(sumPanel);
@@ -1198,7 +1203,7 @@ function renderCaptureCard(captureEntries, engine) {
     const details = document.createElement("details");
     details.className = "stage-expand";
     const summary = document.createElement("summary");
-    summary.textContent = `addMessage \u5217\u8868 (${msgs.length} \u6761\u6d88\u606f)`;
+    summary.textContent = `afterTurn \u6d88\u606f\u5217\u8868 (${msgs.length} \u6761)`;
     details.appendChild(summary);
     details.appendChild(renderAssembleMsgList(msgs));
     body.appendChild(details);
@@ -1234,7 +1239,7 @@ function renderAssembleCard(assembleEntries, engine) {
   metaRow.className = "stage-meta-row";
   for (const tag of [
     engine?.label ? `engine: ${engine.label}` : "",
-    `诊断条目: ${assembleEntries.length}`,
+    `\u8bca\u65ad\u6761\u76ee: ${assembleEntries.length}`,
   ].filter(Boolean)) {
     const span = document.createElement("span");
     span.className = "stage-meta-tag";
@@ -1246,27 +1251,27 @@ function renderAssembleCard(assembleEntries, engine) {
   const lcmBody = document.createElement("div");
   lcmBody.className = "lcm-step-body";
 
-  const inputEntry = assembleEntries.find(e => e.stage === "assemble_input");
+  const entryData = assembleEntries.find(e => e.stage === "assemble_entry" || e.stage === "assemble_input");
+  const resultData = assembleEntries.find(e => e.stage === "assemble_result");
+  const errorData = assembleEntries.find(e => e.stage === "assemble_error");
   const contextEntry = assembleEntries.find(e => e.stage === "context_assemble");
   const outputEntry = assembleEntries.find(e => e.stage === "assemble_output");
 
-  const aiD = inputEntry?.data || {};
-  const caD = contextEntry?.data || {};
-  const aoD = outputEntry?.data || {};
-  const budget = aiD.tokenBudget || caD.tokenBudget || 0;
-  const inputTok = aiD.inputTokenEstimate || 0;
-  const outputTok = aoD.estimatedTokens || caD.assembledTokens || caD.estimatedTokens || 0;
-  const saved = aoD.tokensSaved || 0;
-  const savePct = aoD.savingPct || 0;
-  const rawCount = caD.rawMessageCount || 0;
-  const sumCount = caD.summaryCount || 0;
-  const archiveCount = caD.archiveCount;
-  const activeCount = caD.activeCount;
-  const hasOvAssemble = archiveCount != null || activeCount != null;
+  const eD = entryData?.data || {};
+  const rD = resultData?.data || contextEntry?.data || {};
+  const oD = outputEntry?.data || {};
+  const budget = eD.tokenBudget || 0;
+  const inputTok = eD.inputTokenEstimate || rD.inputTokenEstimate || 0;
+  const outputTok = rD.estimatedTokens || oD.estimatedTokens || rD.assembledTokens || 0;
+  const saved = rD.tokensSaved || oD.tokensSaved || 0;
+  const savePct = rD.savingPct || oD.savingPct || 0;
+  const archiveCount = rD.archiveCount;
+  const activeCount = rD.activeCount;
+  const outputMsgCount = rD.outputMessagesCount || oD.outputMessagesCount || rD.assembledMessagesCount || 0;
   const budgetPct = budget > 0 ? ((outputTok / budget) * 100).toFixed(1) : "?";
-  const sessionId = inputEntry?.sessionId || contextEntry?.sessionId || outputEntry?.sessionId || "";
-  const passthrough = caD.passthrough;
-  const passthroughReason = caD.reason || "";
+  const sessionId = entryData?.sessionId || resultData?.sessionId || contextEntry?.sessionId || "";
+  const passthrough = rD.passthrough;
+  const passthroughReason = rD.reason || "";
   const reasonMap = {
     "no_ov_data": "\u65e0 OV \u4f1a\u8bdd\u6570\u636e",
     "ov_msgs_fewer_than_input": "OV \u6d88\u606f\u5c11\u4e8e\u539f\u59cb\u8f93\u5165",
@@ -1278,214 +1283,100 @@ function renderAssembleCard(assembleEntries, engine) {
   const summaryKvs = [
     ["Session", sessionId || "(unknown)"],
     ["Token \u9884\u7b97", fmt(budget)],
-    ["\u539f\u59cb\u6d88\u606f", (aiD.messagesCount || 0) + " \u6761\uff0c~" + fmt(inputTok) + " tokens"],
-    ["\u7ec4\u88c5\u540e", (aoD.outputMessagesCount || caD.assembledMessagesCount || 0) + " \u6761\uff0c~" + fmt(outputTok) + " tokens (\u5360\u9884\u7b97 " + budgetPct + "%)"],
+    ["\u539f\u59cb\u6d88\u606f", (eD.messagesCount || 0) + " \u6761\uff0c~" + fmt(inputTok) + " tokens"],
   ];
+  if (resultData || outputEntry) {
+    summaryKvs.push(["\u7ec4\u88c5\u540e", outputMsgCount + " \u6761\uff0c~" + fmt(outputTok) + " tokens (\u5360\u9884\u7b97 " + budgetPct + "%)"]);
+  }
   if (saved !== 0) {
     const sign = saved > 0 ? "-" : "+";
     summaryKvs.push(["\u8282\u7701", fmt(Math.abs(saved)) + " tokens (" + sign + Math.abs(savePct) + "%)"]);
   }
-  if (hasOvAssemble) {
+  if (archiveCount != null || activeCount != null) {
     summaryKvs.push(["\u6d88\u606f\u7ec4\u6210", (archiveCount || 0) + " \u5f52\u6863 + " + (activeCount || 0) + " \u6d3b\u8dc3"]);
-  } else if (rawCount > 0 || sumCount > 0) {
-    summaryKvs.push(["\u6d88\u606f\u7ec4\u6210", rawCount + " \u539f\u6587 + " + sumCount + " \u6458\u8981"]);
+  }
+  if (rD.latestArchiveId) {
+    summaryKvs.push(["\u6700\u65b0\u5f52\u6863", rD.latestArchiveId]);
   }
   if (passthrough) {
     summaryKvs.push(["\u76f4\u901a\u539f\u56e0", reasonMap[passthroughReason] || passthroughReason || "\u539f\u6837\u900f\u4f20"]);
+  }
+  if (errorData) {
+    summaryKvs.push(["\u26a0 \u9519\u8bef", (errorData.data || {}).error || "unknown"]);
   }
   for (const [k, v] of summaryKvs) {
     const row = document.createElement("div");
     row.className = "lcm-kv";
     const rl = document.createElement("span"); rl.className = "lcm-kv-label"; rl.textContent = k;
-    const rv = document.createElement("span"); rv.className = "lcm-kv-inline" + (k.includes("\u8282\u7701") ? " lcm-saving" : ""); rv.textContent = v;
+    const isHighlight = k.includes("\u8282\u7701") || k.startsWith("\u26a0");
+    const rv = document.createElement("span"); rv.className = "lcm-kv-inline" + (isHighlight ? " lcm-saving" : ""); rv.textContent = v;
     row.appendChild(rl); row.appendChild(rv); sumPanel.appendChild(row);
   }
-  const note = document.createElement("div");
-  note.className = "lcm-assemble-note";
-  note.style.whiteSpace = "pre-wrap";
-  note.textContent = "\u2139 tokens \u4e3a engine \u5b58\u50a8\u7684 content \u8ba1\u6570\uff08Math.ceil(content.length/4)\uff09\uff0c\u6d88\u606f\u5217\u8868\u4e2d\u7684 token \u4e3a\u7eaf\u6587\u672c\u7c97\u4f30\uff0c\u53ef\u80fd\u504f\u5c0f";
-  sumPanel.appendChild(note);
   lcmBody.appendChild(sumPanel);
 
-  const evaluateEntry = assembleEntries.find(e => e.stage === "compaction_evaluate");
-  if (evaluateEntry) {
-    const d = evaluateEntry.data || {};
-    const section = renderAssembleSection("压缩决策");
-    const kvs = [
-      ["当前 tokens", fmt(d.currentTokens)],
-      ["tokenBudget", fmt(d.tokenBudget)],
-      ["contextThreshold", d.contextThreshold ?? ""],
-      ["阈值", fmt(d.threshold)],
-      ["需要压缩", d.shouldCompact ? "是" : "否"],
-    ];
-    if (d.reason && d.reason !== "none") kvs.push(["原因", d.reason]);
-    for (const [k, v] of kvs) {
-      const row = document.createElement("div");
-      row.className = "lcm-kv";
-      const rl = document.createElement("span");
-      rl.className = "lcm-kv-label";
-      rl.textContent = k;
-      const rv = document.createElement("span");
-      rv.className = "lcm-kv-inline";
-      rv.textContent = String(v ?? "");
-      row.appendChild(rl);
-      row.appendChild(rv);
-      section.appendChild(row);
-    }
-    lcmBody.appendChild(section);
-  }
-
-  if (inputEntry) {
-    const d = inputEntry.data || {};
-    const section = renderAssembleSection("原始消息输入");
+  if (entryData) {
+    const d = entryData.data || {};
+    const section = renderAssembleSection("\u539f\u59cb\u6d88\u606f\u8f93\u5165");
     const inputMsgs = d.messages || [];
     const inputMsgTokens = inputMsgs.reduce((s, m) => s + (m.tokens || 0), 0);
     const intro = document.createElement("div");
     intro.className = "lcm-kv";
     const introLabel = document.createElement("span");
     introLabel.className = "lcm-kv-label";
-    introLabel.textContent = "消息数";
+    introLabel.textContent = "\u6d88\u606f\u6570";
     const introValue = document.createElement("span");
     introValue.className = "lcm-kv-inline";
-    introValue.textContent = `${d.messagesCount || 0} 条，${fmt(inputMsgTokens)} token`;
+    introValue.textContent = `${d.messagesCount || 0} \u6761\uff0c${fmt(inputMsgTokens)} token`;
     intro.appendChild(introLabel);
     intro.appendChild(introValue);
     section.appendChild(intro);
-    const meta = document.createElement("div");
-    meta.className = "lcm-kv";
-    const estRow = document.createElement("div"); estRow.className = "lcm-kv";
-    const estL = document.createElement("span"); estL.className = "lcm-kv-label"; estL.textContent = "inputTokenEstimate";
-    const estV = document.createElement("span"); estV.className = "lcm-kv-inline"; estV.textContent = fmt(d.inputTokenEstimate) + " (含开销)";
-    estRow.appendChild(estL); estRow.appendChild(estV); section.appendChild(estRow);
-    const ml = document.createElement("span"); ml.className = "lcm-kv-label"; ml.textContent = "tokenBudget";
-    const mv = document.createElement("span"); mv.className = "lcm-kv-inline"; mv.textContent = fmt(d.tokenBudget);
-    meta.appendChild(ml); meta.appendChild(mv);
-    section.appendChild(meta);
-    if (d.hasSummaryItems) {
-      const m2 = document.createElement("div"); m2.className = "lcm-kv";
-      const m2l = document.createElement("span"); m2l.className = "lcm-kv-label"; m2l.textContent = "\u542b\u6458\u8981";
-      const m2v = document.createElement("span"); m2v.className = "lcm-kv-inline"; m2v.textContent = "\u662f";
-      m2.appendChild(m2l); m2.appendChild(m2v); section.appendChild(m2);
-    }
-    const msgs = d.messages || [];
-    if (msgs.length > 0) {
-      section.appendChild(renderMessageDetails(`展开详情 (${msgs.length} 条消息)`, msgs));
+    if (inputMsgs.length > 0) {
+      section.appendChild(renderMessageDetails(`\u5c55\u5f00\u8be6\u60c5 (${inputMsgs.length} \u6761\u6d88\u606f)`, inputMsgs));
     }
     lcmBody.appendChild(section);
   }
 
-  if (contextEntry) {
-    const d = contextEntry.data || {};
-    const section = renderAssembleSection("上下文组装");
-    const sc = d.summaryCount||0, rc = d.rawMessageCount||0, fc = d.freshTailCount||0;
-    const ac = d.archiveCount, amc = d.activeCount;
-    const hasOvCtx = ac != null || amc != null;
-    const asmMsgs = d.assembledMessages || [];
-    const asmTokSum = asmMsgs.reduce((s, m) => s + (m.tokens || 0), 0);
-    const asmTokDisplay = d.assembledTokens || asmTokSum;
-    const intro = document.createElement("div");
-    intro.className = "lcm-kv";
-    const introLabel = document.createElement("span");
-    introLabel.className = "lcm-kv-label";
-    introLabel.textContent = "组装结果";
-    const introValue = document.createElement("span");
-    introValue.className = "lcm-kv-inline";
-    introValue.textContent = hasOvCtx
-      ? `archives=${ac||0}, active=${amc||0}, output=${d.assembledMessagesCount||asmMsgs.length}, ~${fmt(asmTokDisplay)} tokens`
-      : `raw=${rc}, summaries=${sc}, freshTail=${fc}, ${fmt(asmTokSum)} token`;
-    intro.appendChild(introLabel);
-    intro.appendChild(introValue);
-    section.appendChild(intro);
-    const kvs = hasOvCtx ? [
-      ["\u5f52\u6863\u6761\u6570", ac||0], ["\u6d3b\u8dc3\u6d88\u606f", amc||0],
-      ["\u7ec4\u88c5\u540e\u6d88\u606f", d.assembledMessagesCount||asmMsgs.length],
-      ["\u7ec4\u88c5\u540e tokens", fmt(asmTokDisplay)],
-      ["passthrough", d.passthrough ? "\u662f" : "\u5426"],
-    ] : [
-      ["\u539f\u59cb\u6d88\u606f", rc], ["\u6458\u8981\u6761\u6570", sc],
-      ["\u4fdd\u62a4\u5c3e\u90e8", fc], ["\u5c3e\u90e8 tokens", fmt(d.tailTokens)],
-      ["estimatedTokens", fmt(d.estimatedTokens) + " (\u6570 content JSON)"], ["tokenBudget", fmt(d.tokenBudget)]
-    ];
+  if (resultData || contextEntry) {
+    const d = resultData ? resultData.data || {} : contextEntry.data || {};
+    const section = renderAssembleSection("\u7ec4\u88c5\u7ed3\u679c");
+    const kvs = [];
+    if (d.archiveCount != null) kvs.push(["\u5f52\u6863\u6761\u6570", d.archiveCount]);
+    if (d.activeCount != null) kvs.push(["\u6d3b\u8dc3\u6d88\u606f", d.activeCount]);
+    kvs.push(["\u8f93\u51fa\u6d88\u606f\u6570", d.outputMessagesCount || d.assembledMessagesCount || 0]);
+    kvs.push(["\u4f30\u7b97 tokens", fmt(d.estimatedTokens || d.assembledTokens || 0)]);
+    if (d.tokensSaved) kvs.push(["\u8282\u7701 tokens", fmt(d.tokensSaved) + " (" + (d.savingPct || 0) + "%)"]);
+    kvs.push(["passthrough", d.passthrough ? "\u662f" : "\u5426"]);
+    if (d.passthrough && d.reason) kvs.push(["\u539f\u56e0", reasonMap[d.reason] || d.reason]);
     for (const [k, v] of kvs) {
       const row = document.createElement("div"); row.className = "lcm-kv";
       const rl = document.createElement("span"); rl.className = "lcm-kv-label"; rl.textContent = k;
-      const rv = document.createElement("span"); rv.className = "lcm-kv-inline"; rv.textContent = String(v??"");
+      const rv = document.createElement("span"); rv.className = "lcm-kv-inline"; rv.textContent = String(v ?? "");
       row.appendChild(rl); row.appendChild(rv); section.appendChild(row);
     }
-    if (d.systemPromptAddition) {
-      const spRow = document.createElement("details");
-      spRow.className = "lcm-messages-section";
-      const spSum = document.createElement("summary");
-      spSum.textContent = "\u{1f4dd} System Prompt Addition";
-      spRow.appendChild(spSum);
-      const spText = document.createElement("pre");
-      spText.className = "lcm-msg-text";
-      spText.style.maxHeight = "200px";
-      spText.textContent = d.systemPromptAddition;
-      spRow.appendChild(spText);
-      section.appendChild(spRow);
-    }
-    const asm = d.assembledMessages || [];
-    if (asm.length > 0) {
-      section.appendChild(renderMessageDetails(`展开详情 (${asm.length} 条消息)`, asm));
+    const resultMsgs = d.messages || d.assembledMessages || [];
+    if (resultMsgs.length > 0) {
+      section.appendChild(renderMessageDetails(`\u5c55\u5f00\u8be6\u60c5 (${resultMsgs.length} \u6761\u6d88\u606f)`, resultMsgs));
     }
     lcmBody.appendChild(section);
   }
 
-  if (outputEntry) {
+  if (outputEntry && !resultData) {
     const d = outputEntry.data || {};
-    const section = renderAssembleSection("最终输出");
-    const sysPrompt = d.systemPromptAddition;
+    const section = renderAssembleSection("\u6700\u7ec8\u8f93\u51fa");
     const outMsgs = d.messages || [];
-    const outTokSum = outMsgs.reduce((s, m) => s + (m.tokens || 0), 0);
-    const outTokDisplay = d.estimatedTokens || outTokSum;
-    const intro = document.createElement("div");
-    intro.className = "lcm-kv";
-    const introLabel = document.createElement("span");
-    introLabel.className = "lcm-kv-label";
-    introLabel.textContent = "输出消息";
-    const introValue = document.createElement("span");
-    introValue.className = "lcm-kv-inline";
-    introValue.textContent = `${d.outputMessagesCount || outMsgs.length} 条，~${fmt(outTokDisplay)} tokens`;
-    intro.appendChild(introLabel);
-    intro.appendChild(introValue);
-    section.appendChild(intro);
-    if (d.inputTokenEstimate) {
-      const itRow = document.createElement("div"); itRow.className = "lcm-kv";
-      const itL = document.createElement("span"); itL.className = "lcm-kv-label"; itL.textContent = "\u539f\u59cb tokens";
-      const itV = document.createElement("span"); itV.className = "lcm-kv-inline"; itV.textContent = fmt(d.inputTokenEstimate);
-      itRow.appendChild(itL); itRow.appendChild(itV); section.appendChild(itRow);
-    }
-    if (d.estimatedTokens) {
-      const etRow = document.createElement("div"); etRow.className = "lcm-kv";
-      const etL = document.createElement("span"); etL.className = "lcm-kv-label"; etL.textContent = "\u7ec4\u88c5\u540e tokens";
-      const etV = document.createElement("span"); etV.className = "lcm-kv-inline"; etV.textContent = fmt(d.estimatedTokens);
-      etRow.appendChild(etL); etRow.appendChild(etV); section.appendChild(etRow);
-    }
-    const oSaved = d.tokensSaved || 0;
-    if (oSaved !== 0) {
+    const kvs = [
+      ["\u8f93\u51fa\u6d88\u606f", (d.outputMessagesCount || outMsgs.length) + " \u6761"],
+      ["\u4f30\u7b97 tokens", fmt(d.estimatedTokens || 0)],
+    ];
+    if (d.tokensSaved) kvs.push(["\u8282\u7701", fmt(d.tokensSaved) + " tokens (" + (d.savingPct || 0) + "%)"]);
+    for (const [k, v] of kvs) {
       const row = document.createElement("div"); row.className = "lcm-kv";
-      const rl = document.createElement("span"); rl.className = "lcm-kv-label"; rl.textContent = oSaved > 0 ? "\u8282\u7701" : "\u6269\u5c55";
-      const sign = oSaved > 0 ? "-" : "+";
-      const rv = document.createElement("span"); rv.className = "lcm-kv-value" + (oSaved > 0 ? " lcm-saving" : ""); rv.textContent = fmt(Math.abs(oSaved)) + " tokens (" + sign + Math.abs(d.savingPct||0) + "%)";
+      const rl = document.createElement("span"); rl.className = "lcm-kv-label"; rl.textContent = k;
+      const rv = document.createElement("span"); rv.className = "lcm-kv-inline"; rv.textContent = v;
       row.appendChild(rl); row.appendChild(rv); section.appendChild(row);
     }
-    if (sysPrompt) {
-      const spRow = document.createElement("details");
-      spRow.className = "lcm-messages-section";
-      const spSum = document.createElement("summary");
-      spSum.textContent = "\u{1f4dd} System Prompt Addition";
-      spRow.appendChild(spSum);
-      const spText = document.createElement("pre");
-      spText.className = "lcm-msg-text";
-      spText.style.maxHeight = "200px";
-      spText.textContent = sysPrompt;
-      spRow.appendChild(spText);
-      section.appendChild(spRow);
-    }
-    const msgs = d.messages || [];
-    if (msgs.length > 0) {
-      section.appendChild(renderMessageDetails(`展开详情 (${msgs.length} 条消息)`, msgs));
+    if (outMsgs.length > 0) {
+      section.appendChild(renderMessageDetails(`\u5c55\u5f00\u8be6\u60c5 (${outMsgs.length} \u6761\u6d88\u606f)`, outMsgs));
     }
     lcmBody.appendChild(section);
   }
