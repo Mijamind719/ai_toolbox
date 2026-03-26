@@ -59,6 +59,7 @@ CAPTURE_API_HOST="${CAPTURE_API_HOST:-0.0.0.0}"
 CAPTURE_API_PORT="${CAPTURE_API_PORT:-8000}"
 MITMDUMP_BIN="${MITMDUMP_BIN:-$(command -v mitmdump || true)}"
 CAPTURE_API_PYTHON="${CAPTURE_API_PYTHON:-}"
+OPENVIKING_PYTHON="${OPENVIKING_PYTHON:-}"
 CONTEXT_CAPTURE_HTTP_URL_PREFIX="${CONTEXT_CAPTURE_HTTP_URL_PREFIX:-}"
 MITM_LOG="${MITM_LOG:-$STATE_DIR/mitmdump.log}"
 API_LOG="${API_LOG:-$STATE_DIR/context_capture_api.log}"
@@ -639,6 +640,7 @@ start_gateway_capture() {
         OPENCLAW_CACHE_TRACE_MESSAGES=1 \
         OPENCLAW_CACHE_TRACE_PROMPT=1 \
         OPENCLAW_CACHE_TRACE_SYSTEM=1 \
+        ${OPENVIKING_PYTHON:+OPENVIKING_PYTHON='$OPENVIKING_PYTHON'} \
         node '$OPENCLAW_BIN' gateway --port '$port' --token '$token' --bind '$OPENCLAW_GATEWAY_BIND' 2>&1 \
         | tee '$GATEWAY_LOG' \
         | '$api_python' '$forwarder' '$GATEWAY_STRUCTURED_LOG'
@@ -658,6 +660,7 @@ start_gateway_capture() {
         OPENCLAW_CACHE_TRACE_MESSAGES=1 \
         OPENCLAW_CACHE_TRACE_PROMPT=1 \
         OPENCLAW_CACHE_TRACE_SYSTEM=1 \
+        ${OPENVIKING_PYTHON:+OPENVIKING_PYTHON='$OPENVIKING_PYTHON'} \
         '$OPENCLAW_BIN' gateway --port '$port' --token '$token' --bind '$OPENCLAW_GATEWAY_BIND' 2>&1 \
         | tee '$GATEWAY_LOG' \
         | '$api_python' '$forwarder' '$GATEWAY_STRUCTURED_LOG'
@@ -963,6 +966,41 @@ cmd_setup() {
     log "[OK] OpenClaw binary found: $oc_bin"
   else
     log "[INFO] openclaw not in PATH (optional: set OPENCLAW_BIN or install openclaw)"
+  fi
+
+  # Detect OpenViking Python
+  if [[ -n "$OPENVIKING_PYTHON" ]] && [[ -x "$OPENVIKING_PYTHON" ]]; then
+    log "[OK] OpenViking Python: $OPENVIKING_PYTHON"
+  else
+    local ov_py=""
+    local ov_sibling_dirs=("$REPO_ROOT/../OpenViking-test" "$REPO_ROOT/../OpenViking" "$SCRIPT_DIR/../../OpenViking-test" "$SCRIPT_DIR/../../OpenViking")
+    for candidate_dir in "${ov_sibling_dirs[@]}"; do
+      for venv_name in venv313 venv venv311; do
+        local candidate="$candidate_dir/$venv_name/bin/python"
+        if [[ -x "$candidate" ]]; then
+          ov_py="$(cd "$(dirname "$candidate")" && pwd)/$(basename "$candidate")"
+          break 2
+        fi
+      done
+    done
+    if [[ -z "$ov_py" ]]; then
+      ov_py="$(command -v python3 || true)"
+    fi
+    if [[ -n "$ov_py" ]]; then
+      OPENVIKING_PYTHON="$ov_py"
+      log "[OK] OpenViking Python auto-detected: $ov_py"
+      local env_file="${TOOLKIT_ENV_FILE:-$SCRIPT_DIR/.env}"
+      if [[ -f "$env_file" ]]; then
+        if grep -q "^OPENVIKING_PYTHON=" "$env_file" 2>/dev/null; then
+          sed -i "s|^OPENVIKING_PYTHON=.*|OPENVIKING_PYTHON=$ov_py|" "$env_file"
+        else
+          echo "OPENVIKING_PYTHON=$ov_py" >> "$env_file"
+        fi
+        log "[OK] Written OPENVIKING_PYTHON to $env_file"
+      fi
+    else
+      log "[WARN] OpenViking Python not found. Set OPENVIKING_PYTHON in .env if OV plugin needs a local server."
+    fi
   fi
 
   if $ok; then
