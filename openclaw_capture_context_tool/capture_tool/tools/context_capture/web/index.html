@@ -46,6 +46,12 @@
         border-color: #f3c6c6; color: #b42318; background: #fff7f7;
       }
       .toolbar button.button-danger:hover { background: #ffeaea; }
+      .toolbar select {
+        border: 1px solid var(--line); background: var(--card); color: var(--ink);
+        border-radius: 8px; cursor: pointer; font: inherit; padding: 7px 14px;
+        appearance: auto;
+      }
+      .toolbar select:hover { background: #f0f4ff; }
       .round-separator {
         display: flex; align-items: center; gap: 10px;
         padding: 6px 0; color: #b0bcc8; font-size: 12px; user-select: none;
@@ -424,6 +430,12 @@
       <header class="toolbar">
         <h1>OpenClaw 会话抓包分析</h1>
         <div class="toolbar-right">
+          <select id="engine-filter" title="按引擎类型过滤">
+            <option value="">全部引擎</option>
+            <option value="openviking">OpenViking</option>
+            <option value="lossless-claw">lossless-claw</option>
+            <option value="unknown">unknown</option>
+          </select>
           <button id="clear-capture-button" class="button-danger" type="button">清理抓包</button>
           <button id="show-all-button" type="button">全量视图</button>
           <button id="refresh-button" type="button">刷新</button>

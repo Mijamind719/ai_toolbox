@@ -9,6 +9,7 @@ const state = {
   lcmDiagnostics: [],
   showAllMode: false,
   allTraces: [],
+  engineFilter: "",
 };
 
 function getElement(id) { return document.getElementById(id); }
@@ -1740,19 +1741,28 @@ function buildVisibleTimeline(timeline) {
     const tsB = typeof b?.start_ts === "number" ? b.start_ts : 0;
     return tsB - tsA;
   });
-  const visible = ordered.filter(item => item?.is_heartbeat_internal !== true);
+  let visible = ordered.filter(item => item?.is_heartbeat_internal !== true);
+  const hiddenHeartbeat = ordered.length - visible.length;
+
+  if (state.engineFilter) {
+    visible = visible.filter(item => item.engine_id === state.engineFilter);
+  }
+
   if (visible.length > 0) {
-    const hiddenCount = ordered.length - visible.length;
-    const note = hiddenCount > 0
-      ? `共 ${visible.length} 条会话，已隐藏 ${hiddenCount} 条 HEARTBEAT 内部轮次`
-      : `共 ${visible.length} 条会话`;
-    return { list: visible, note };
+    const parts = [`共 ${visible.length} 条会话`];
+    if (state.engineFilter) {
+      parts.push(`引擎: ${engineBadgeText(state.engineFilter)}`);
+    }
+    if (hiddenHeartbeat > 0) {
+      parts.push(`已隐藏 ${hiddenHeartbeat} 条 HEARTBEAT 内部轮次`);
+    }
+    return { list: visible, note: parts.join("，") };
   }
   if (ordered.length > 0) {
-    return {
-      list: [],
-      note: `共 ${ordered.length} 条会话，已隐藏 ${ordered.length} 条 HEARTBEAT 内部轮次`,
-    };
+    const reason = state.engineFilter
+      ? `当前引擎过滤 "${engineBadgeText(state.engineFilter)}" 无匹配`
+      : `已隐藏 ${ordered.length} 条 HEARTBEAT 内部轮次`;
+    return { list: [], note: `共 ${ordered.length} 条会话，${reason}` };
   }
   return { list: [], note: "暂无会话数据。" };
 }
@@ -2192,6 +2202,14 @@ if (showAllBtn) {
     } else {
       void showAllTraces();
     }
+  });
+}
+
+const engineFilterEl = getElement("engine-filter");
+if (engineFilterEl) {
+  engineFilterEl.addEventListener("change", () => {
+    state.engineFilter = engineFilterEl.value;
+    void loadTimelineAndSelect();
   });
 }
 

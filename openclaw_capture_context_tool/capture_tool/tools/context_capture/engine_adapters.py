@@ -85,10 +85,12 @@ OPENVIKING_PRE_STAGES = {
     "recall_inject",
     "recall_error",
     "ingest_reply_assist",
+    "assemble_entry",
+    "assemble_result",
+    "assemble_error",
     "assemble_input",
     "context_assemble",
     "assemble_output",
-    "assemble_error",
 }
 
 
@@ -624,7 +626,10 @@ def _extract_diag_entries(logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _build_diag_assemble_section(diag_entries: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Build an assemble section from structured diag entries (compatible with renderAssembleCard)."""
-    assemble_stages = {"assemble_input", "context_assemble", "assemble_output"}
+    assemble_stages = {
+        "assemble_entry", "assemble_result", "assemble_error",
+        "assemble_input", "context_assemble", "assemble_output",
+    }
     relevant = [e for e in diag_entries if e.get("stage") in assemble_stages]
     if not relevant:
         return None
@@ -637,10 +642,27 @@ def _build_diag_assemble_section(diag_entries: list[dict[str, Any]]) -> dict[str
         stage = entry.get("stage", "")
         data = entry.get("data") or {}
 
-        if stage == "assemble_input":
+        if stage == "assemble_entry" or stage == "assemble_input":
             items.append(_item(
-                "原始消息输入",
+                "assemble Entry",
                 f"消息数={data.get('messagesCount') or 0}, 输入tokens={data.get('inputTokenEstimate') or 0}, budget={data.get('tokenBudget') or 0}",
+            ))
+        elif stage == "assemble_result":
+            saved = data.get("tokensSaved") or 0
+            pct = data.get("savingPct") or 0
+            items.append(_item(
+                "assemble Result",
+                f"passthrough={bool(data.get('passthrough'))}, archives={data.get('archiveCount') or 0}, "
+                f"active={data.get('activeCount') or 0}, output={data.get('outputMessagesCount') or 0}, "
+                f"tokens={data.get('estimatedTokens') or 0}, 节省={saved} ({pct}%)",
+            ))
+            if saved:
+                stats.append(_stat("节省 tokens", f"{saved} ({pct}%)"))
+        elif stage == "assemble_error":
+            items.append(_item(
+                "assemble Error",
+                _preview_text(data.get("error") or "unknown"),
+                tone="warning",
             ))
         elif stage == "context_assemble":
             items.append(_item(
@@ -677,7 +699,10 @@ def _build_diag_assemble_section(diag_entries: list[dict[str, Any]]) -> dict[str
 
 def _build_diag_capture_section(diag_entries: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Build a capture section from structured diag entries (compatible with renderCaptureCard)."""
-    capture_stages = {"afterTurn_entry", "capture_store", "capture_skip", "capture_commit"}
+    capture_stages = {
+        "afterTurn_entry", "afterTurn_skip", "afterTurn_commit", "afterTurn_error",
+        "capture_store", "capture_skip", "capture_commit",
+    }
     relevant = [e for e in diag_entries if e.get("stage") in capture_stages]
     if not relevant:
         return None
@@ -695,21 +720,34 @@ def _build_diag_capture_section(diag_entries: list[dict[str, Any]]) -> dict[str,
                 "afterTurn 入口",
                 f"新消息={data.get('newMessageCount') or 0}, ~{data.get('newTurnTokens') or 0} tokens",
             ))
+        elif stage == "afterTurn_skip":
+            items.append(_item(
+                "afterTurn Skip",
+                f"reason={data.get('reason') or '-'}, totalMessages={data.get('totalMessages') or 0}",
+                tone="warning",
+            ))
         elif stage == "capture_store":
             stored = data.get("stored", False)
             items.append(_item(
-                "消息存储",
+                "Capture Store",
                 f"stored={stored}, chars={data.get('chars') or 0}",
+            ))
+        elif stage == "afterTurn_commit" or stage == "capture_commit":
+            items.append(_item(
+                "afterTurn Commit",
+                f"archived={data.get('archived')}, status={data.get('status')}",
+            ))
+        elif stage == "afterTurn_error":
+            items.append(_item(
+                "afterTurn Error",
+                _preview_text(data.get("error") or "unknown"),
+                tone="warning",
             ))
         elif stage == "capture_skip":
             items.append(_item(
-                "跳过压缩",
+                "afterTurn Skip",
                 f"pending={data.get('pendingTokens') or 0}/{data.get('commitTokenThreshold') or 0}",
-            ))
-        elif stage == "capture_commit":
-            items.append(_item(
-                "触发压缩",
-                f"archived={data.get('archived')}, status={data.get('status')}",
+                tone="warning",
             ))
 
         raw_refs.append(_raw_ref(stage, entry))
@@ -878,8 +916,8 @@ def _build_openviking_sections_from_entries(entries: list[dict[str, Any]]) -> li
     sections: list[dict[str, Any]] = []
     section_specs = (
         ("recall", "recall", "OpenViking Recall", {"recall_precheck", "recall_search", "recall_inject", "recall_error"}),
-        ("assemble", "assemble", "Context Assemble", {"assemble_input", "context_assemble", "assemble_output", "assemble_error"}),
-        ("capture", "capture", "OpenViking Capture", {"afterTurn_entry", "capture_store", "capture_check", "capture_commit", "capture_skip", "capture_error"}),
+        ("assemble", "assemble", "Context Assemble", {"assemble_entry", "assemble_result", "assemble_error", "assemble_input", "context_assemble", "assemble_output"}),
+        ("capture", "capture", "OpenViking Capture", {"afterTurn_entry", "afterTurn_skip", "afterTurn_commit", "afterTurn_error", "capture_store", "capture_check", "capture_commit", "capture_skip", "capture_error"}),
         ("assist", "summary", "OpenViking Reply Assist", {"ingest_reply_assist"}),
     )
 
@@ -915,13 +953,26 @@ def _build_openviking_sections_from_entries(entries: list[dict[str, Any]]) -> li
                 memories = data.get("memories")
                 if isinstance(memories, list) and memories:
                     raw_refs.append(_raw_ref("recall memories", memories))
-            elif stage == "assemble_input":
+            elif stage == "assemble_entry" or stage == "assemble_input":
                 items.append(
                     _item(
-                        "原始消息输入",
+                        "assemble Entry",
                         f"消息数={data.get('messagesCount') or 0}, 输入tokens={data.get('inputTokenEstimate') or 0}, budget={data.get('tokenBudget') or 0}",
                     )
                 )
+            elif stage == "assemble_result":
+                saved = data.get("tokensSaved") or 0
+                pct = data.get("savingPct") or 0
+                items.append(
+                    _item(
+                        "assemble Result",
+                        f"passthrough={bool(data.get('passthrough'))}, archives={data.get('archiveCount') or 0}, "
+                        f"active={data.get('activeCount') or 0}, output={data.get('outputMessagesCount') or 0}, "
+                        f"tokens={data.get('estimatedTokens') or 0}, 节省={saved} ({pct}%)",
+                    )
+                )
+                if saved:
+                    stats.append(_stat("节省 tokens", f"{saved} ({pct}%)"))
             elif stage == "context_assemble":
                 items.append(
                     _item(
@@ -943,6 +994,12 @@ def _build_openviking_sections_from_entries(entries: list[dict[str, Any]]) -> li
                         f"总消息={data.get('totalMessages') or 0}, 新消息={data.get('newMessageCount') or 0}, prePrompt={data.get('prePromptMessageCount') or 0}",
                     )
                 )
+            elif stage == "afterTurn_skip":
+                items.append(_item(
+                    "afterTurn Skip",
+                    f"reason={data.get('reason') or '-'}, totalMessages={data.get('totalMessages') or 0}",
+                    tone="warning",
+                ))
             elif stage == "capture_store":
                 items.append(
                     _item(
@@ -958,17 +1015,23 @@ def _build_openviking_sections_from_entries(entries: list[dict[str, Any]]) -> li
                         tone="warning" if data.get("shouldCapture") is False else None,
                     )
                 )
-            elif stage == "capture_commit":
+            elif stage == "afterTurn_commit" or stage == "capture_commit":
                 items.append(
                     _item(
-                        "Capture Commit",
+                        "afterTurn Commit",
                         f"status={data.get('status') or '-'}, archived={data.get('archived')}, pendingTokens={data.get('pendingTokens') or 0}, extracted={data.get('extractedMemories') or 0}",
                     )
                 )
                 if data.get("extractedMemories") is not None:
                     stats.append(_stat("提取 memories", data.get("extractedMemories")))
+            elif stage == "afterTurn_error" or stage == "capture_error":
+                items.append(_item(
+                    "afterTurn Error",
+                    _preview_text(data.get("error") or "unknown"),
+                    tone="warning",
+                ))
             elif stage == "capture_skip":
-                items.append(_item("Capture Skip", data.get("reason") or "-", tone="warning"))
+                items.append(_item("afterTurn Skip", data.get("reason") or "-", tone="warning"))
             elif stage == "ingest_reply_assist":
                 items.append(
                     _item(
@@ -997,43 +1060,66 @@ def _build_openviking_sections_from_entries(entries: list[dict[str, Any]]) -> li
     return sections
 
 
+def _lcm_payload(lcm_entries: list[dict[str, Any]]) -> dict[str, Any]:
+    sections = _build_lossless_sections(lcm_entries)
+    return {
+        "id": "lossless-claw",
+        "label": "lossless-claw",
+        "summary": [
+            _stat("诊断条目", len(lcm_entries)),
+            _stat("section 数", len(sections)),
+        ],
+        "sections": sections,
+    }
+
+
+def _ov_payload(
+    ov_entries: list[dict[str, Any]],
+    ov_logs: list[dict[str, Any]],
+    ov_flows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    sections = (
+        _build_openviking_sections_from_entries(ov_entries)
+        if ov_entries
+        else _build_openviking_sections(ov_logs, ov_flows)
+    )
+    return {
+        "id": "openviking",
+        "label": "OpenViking",
+        "summary": [
+            _stat("诊断条目", len(ov_entries)),
+            _stat("gateway 日志", len(ov_logs)),
+            _stat("HTTP 流量", len(ov_flows)),
+            _stat("section 数", len(sections)),
+        ],
+        "sections": sections,
+    }
+
+
 def build_engine_payload(trace: dict[str, Any], *, context: dict[str, Any]) -> dict[str, Any]:
     lcm_entries = _matching_lcm_entries(trace, lcm_entries=context.get("lcm_entries") or [])
-    if lcm_entries:
-        sections = _build_lossless_sections(lcm_entries)
-        return {
-            "id": "lossless-claw",
-            "label": "lossless-claw",
-            "summary": [
-                _stat("诊断条目", len(lcm_entries)),
-                _stat("section 数", len(sections)),
-            ],
-            "sections": sections,
-        }
-
-    openviking_entries = _matching_openviking_entries(trace, openviking_entries=context.get("openviking_entries") or [])
-    openviking_logs, openviking_flows = _matching_openviking_records(
+    ov_entries = _matching_openviking_entries(trace, openviking_entries=context.get("openviking_entries") or [])
+    ov_logs, ov_flows = _matching_openviking_records(
         trace,
         gateway_records=context.get("gateway_records") or [],
         http_flows=context.get("http_flows") or [],
     )
-    if openviking_entries or openviking_logs or openviking_flows:
-        sections = (
-            _build_openviking_sections_from_entries(openviking_entries)
-            if openviking_entries
-            else _build_openviking_sections(openviking_logs, openviking_flows)
-        )
-        return {
-            "id": "openviking",
-            "label": "OpenViking",
-            "summary": [
-                _stat("诊断条目", len(openviking_entries)),
-                _stat("gateway 日志", len(openviking_logs)),
-                _stat("HTTP 流量", len(openviking_flows)),
-                _stat("section 数", len(sections)),
-            ],
-            "sections": sections,
-        }
+
+    has_lcm = bool(lcm_entries)
+    has_ov = bool(ov_entries) or bool(ov_logs) or bool(ov_flows)
+
+    if has_lcm and not has_ov:
+        return _lcm_payload(lcm_entries)
+
+    if has_ov and not has_lcm:
+        return _ov_payload(ov_entries, ov_logs, ov_flows)
+
+    if has_lcm and has_ov:
+        ov_strength = len(ov_entries) * 3 + len(ov_logs) + len(ov_flows)
+        lcm_strength = len(lcm_entries) * 3
+        if ov_strength >= lcm_strength:
+            return _ov_payload(ov_entries, ov_logs, ov_flows)
+        return _lcm_payload(lcm_entries)
 
     return {
         "id": "unknown",

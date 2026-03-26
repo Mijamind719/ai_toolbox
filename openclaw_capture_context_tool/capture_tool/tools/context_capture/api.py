@@ -1,4 +1,4 @@
-﻿"""Local API scaffold for context capture tool."""
+"""Local API scaffold for context capture tool."""
 
 from __future__ import annotations
 
@@ -940,13 +940,16 @@ def create_app(*, data_dir: Path) -> FastAPI:
     web_dir = Path(__file__).resolve().parent / "web"
 
     @app.get("/api/timeline")
-    def get_timeline() -> list[dict[str, Any]]:
+    def get_timeline(engine: str | None = None) -> list[dict[str, Any]]:
         traces = _load_traces(data_dir)
         diagnostics_context = load_diagnostics_context(data_dir)
-        return [
+        items = [
             _timeline_item(str(index), trace, diagnostics_context=diagnostics_context)
             for index, trace in enumerate(traces)
         ]
+        if engine:
+            items = [item for item in items if item.get("engine_id") == engine]
+        return items
 
     @app.get("/api/trace/{trace_id}")
     def get_trace(trace_id: str) -> dict[str, Any]:
