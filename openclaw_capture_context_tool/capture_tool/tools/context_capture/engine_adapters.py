@@ -78,6 +78,7 @@ OPENVIKING_INJECT_COUNT_RE = re.compile(r"openviking:\s+injecting\s+(?P<count>\d
 OPENVIKING_AUTOCAPTURE_RE = re.compile(
     r"openviking:\s+auto-captured\s+(?P<captured>\d+)\s+new messages,\s+extracted\s+(?P<extracted>\d+)\s+memories"
 )
+OPENVIKING_DIAG_RE = re.compile(r"openviking:\s+diag\s+(?P<json>\{.*\})")
 OPENVIKING_PRE_STAGES = {
     "recall_precheck",
     "recall_search",
@@ -605,12 +606,139 @@ def _flow_summary_item(flow: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _extract_diag_entries(logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Extract structured diag entries from gateway log records matching 'openviking: diag {...}'."""
+    entries: list[dict[str, Any]] = []
+    for record in logs:
+        match = OPENVIKING_DIAG_RE.search(record["message"])
+        if match is None:
+            continue
+        parsed = _safe_json_loads(match.group("json"))
+        if not isinstance(parsed, dict):
+            continue
+        if "ts" not in parsed:
+            parsed["ts"] = record["ts"]
+        entries.append(parsed)
+    return entries
+
+
+def _build_diag_assemble_section(diag_entries: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Build an assemble section from structured diag entries (compatible with renderAssembleCard)."""
+    assemble_stages = {"assemble_input", "context_assemble", "assemble_output"}
+    relevant = [e for e in diag_entries if e.get("stage") in assemble_stages]
+    if not relevant:
+        return None
+
+    stats: list[dict[str, Any]] = [_stat("诊断条目", len(relevant))]
+    items: list[dict[str, Any]] = []
+    raw_refs: list[dict[str, Any]] = []
+
+    for entry in relevant:
+        stage = entry.get("stage", "")
+        data = entry.get("data") or {}
+
+        if stage == "assemble_input":
+            items.append(_item(
+                "原始消息输入",
+                f"消息数={data.get('messagesCount') or 0}, 输入tokens={data.get('inputTokenEstimate') or 0}, budget={data.get('tokenBudget') or 0}",
+            ))
+        elif stage == "context_assemble":
+            items.append(_item(
+                "上下文组装",
+                f"archives={data.get('archiveCount') or 0}, active={data.get('activeCount') or 0}, "
+                f"output={data.get('assembledMessagesCount') or 0}, ~{data.get('assembledTokens') or 0} tokens, "
+                f"passthrough={bool(data.get('passthrough'))}",
+            ))
+        elif stage == "assemble_output":
+            saved = data.get("tokensSaved") or 0
+            pct = data.get("savingPct") or 0
+            items.append(_item(
+                "最终输出",
+                f"输出消息={data.get('outputMessagesCount') or 0}, "
+                f"estimatedTokens={data.get('estimatedTokens') or 0}, "
+                f"原始tokens={data.get('inputTokenEstimate') or 0}, "
+                f"节省={saved} tokens ({pct}%)",
+            ))
+            if saved != 0:
+                stats.append(_stat("节省 tokens", f"{saved} ({pct}%)"))
+
+        raw_refs.append(_raw_ref(stage, entry))
+
+    return {
+        "kind": "assemble",
+        "title": "Context Assemble",
+        "started_at": relevant[0].get("ts"),
+        "ended_at": relevant[-1].get("ts"),
+        "stats": stats,
+        "items": items,
+        "raw_refs": raw_refs,
+    }
+
+
+def _build_diag_capture_section(diag_entries: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Build a capture section from structured diag entries (compatible with renderCaptureCard)."""
+    capture_stages = {"afterTurn_entry", "capture_store", "capture_skip", "capture_commit"}
+    relevant = [e for e in diag_entries if e.get("stage") in capture_stages]
+    if not relevant:
+        return None
+
+    stats: list[dict[str, Any]] = [_stat("诊断条目", len(relevant))]
+    items: list[dict[str, Any]] = []
+    raw_refs: list[dict[str, Any]] = []
+
+    for entry in relevant:
+        stage = entry.get("stage", "")
+        data = entry.get("data") or {}
+
+        if stage == "afterTurn_entry":
+            items.append(_item(
+                "afterTurn 入口",
+                f"新消息={data.get('newMessageCount') or 0}, ~{data.get('newTurnTokens') or 0} tokens",
+            ))
+        elif stage == "capture_store":
+            stored = data.get("stored", False)
+            items.append(_item(
+                "消息存储",
+                f"stored={stored}, chars={data.get('chars') or 0}",
+            ))
+        elif stage == "capture_skip":
+            items.append(_item(
+                "跳过压缩",
+                f"pending={data.get('pendingTokens') or 0}/{data.get('commitTokenThreshold') or 0}",
+            ))
+        elif stage == "capture_commit":
+            items.append(_item(
+                "触发压缩",
+                f"archived={data.get('archived')}, status={data.get('status')}",
+            ))
+
+        raw_refs.append(_raw_ref(stage, entry))
+
+    return {
+        "kind": "capture",
+        "title": "Context afterTurn",
+        "started_at": relevant[0].get("ts"),
+        "ended_at": relevant[-1].get("ts"),
+        "stats": stats,
+        "items": items,
+        "raw_refs": raw_refs,
+    }
+
+
 def _build_openviking_sections(logs: list[dict[str, Any]], flows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    diag_entries = _extract_diag_entries(logs)
+    diag_assemble = _build_diag_assemble_section(diag_entries)
+    diag_capture = _build_diag_capture_section(diag_entries)
+
     grouped_logs: dict[str, list[dict[str, Any]]] = {"recall": [], "capture": [], "ingest": [], "warning": []}
     for record in logs:
+        if OPENVIKING_DIAG_RE.search(record["message"]):
+            continue
         grouped_logs[_classify_openviking_log(record["message"])].append(record)
 
     sections: list[dict[str, Any]] = []
+    if diag_assemble:
+        sections.append(diag_assemble)
 
     recall_items: list[dict[str, Any]] = []
     recall_raw: list[dict[str, Any]] = []
@@ -709,7 +837,9 @@ def _build_openviking_sections(logs: list[dict[str, Any]], flows: list[dict[str,
             capture_items.append(item)
             capture_raw.append(_raw_ref(path or "http", flow))
 
-    if capture_items or capture_raw:
+    if diag_capture:
+        sections.append(diag_capture)
+    elif capture_items or capture_raw:
         related_ts = [r["ts"] for r in grouped_logs["capture"] + grouped_logs["ingest"]]
         related_ts.extend(t for t in (_flow_ts(flow) for flow in flows) if isinstance(t, int))
         sections.append(

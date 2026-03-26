@@ -1,4 +1,4 @@
-﻿const state = {
+const state = {
   timeline: [],
   visibleTimeline: [],
   filterNote: "",
@@ -603,6 +603,17 @@ function renderEngineActionCard(section, engine, compact) {
     }
   }
 
+  if (section?.kind === "capture") {
+    const entries = parseSectionRawEntries(section);
+    const hasCaptureStages = entries.some(entry => {
+      const stage = entry?.stage;
+      return stage === "afterTurn_entry" || stage === "capture_store" || stage === "capture_skip" || stage === "capture_commit";
+    });
+    if (hasCaptureStages) {
+      return renderCaptureCard(entries, engine);
+    }
+  }
+
   return renderBlockCard(buildEngineActionSummary(section, engine), compact);
 }
 
@@ -974,19 +985,20 @@ function renderAssembleMsgList(msgs) {
   list.className = "stage-fields";
   for (const m of msgs) {
     const row = document.createElement("div");
-    row.className = "stage-field-row stage-field-long";
+    row.className = "assemble-msg-item";
     const kind = m.kind || "raw";
-    const labelEl = document.createElement("span");
-    labelEl.className = "stage-field-label";
     const role = m.role || "?";
+    const labelEl = document.createElement("div");
+    labelEl.className = "assemble-msg-header";
     labelEl.textContent = kind === "summary"
-      ? `[summary:${role}] ${fmt(m.tokens)} token`
-      : `[${role}] ${fmt(m.tokens)} token`;
-    const textEl = document.createElement("span");
-    textEl.className = "stage-field-value";
-    textEl.textContent = assembleMessagePreview(m, msgs) || "(empty)";
+      ? `[summary:${role}] ${fmt(m.tokens)} tokens`
+      : `[${role}] ${fmt(m.tokens)} tokens`;
+    if (m.truncated) labelEl.textContent += " (truncated)";
     row.appendChild(labelEl);
-    row.appendChild(textEl);
+    const contentEl = document.createElement("pre");
+    contentEl.className = "assemble-msg-content";
+    contentEl.textContent = (m.content || m.preview || m.text || "(empty)");
+    row.appendChild(contentEl);
     list.appendChild(row);
   }
   return list;
@@ -1084,6 +1096,100 @@ function renderAssembleSection(titleText) {
   return section;
 }
 
+function renderCaptureCard(captureEntries, engine) {
+  const card = document.createElement("div");
+  card.className = "stage-card stage-engine";
+  const header = document.createElement("div");
+  header.className = "stage-header";
+  const label = document.createElement("span");
+  label.className = "stage-label";
+  const body = document.createElement("div");
+  body.className = "stage-body";
+  attachStageToggleBehavior(label, body, "context afterTurn");
+  label.appendChild(document.createTextNode("context afterTurn"));
+  const timeLabel = document.createElement("span");
+  timeLabel.className = "stage-time";
+  timeLabel.textContent = formatTs(captureEntries[0]?.ts);
+  header.appendChild(label);
+  header.appendChild(timeLabel);
+  card.appendChild(header);
+
+  const titleEl = document.createElement("pre");
+  titleEl.className = "stage-text";
+  titleEl.textContent = "Context afterTurn";
+  body.appendChild(titleEl);
+  const metaRow = document.createElement("div");
+  metaRow.className = "stage-meta-row";
+  for (const tag of [
+    engine?.label ? `engine: ${engine.label}` : "",
+    `\u8bca\u65ad\u6761\u76ee: ${captureEntries.length}`,
+  ].filter(Boolean)) {
+    const span = document.createElement("span");
+    span.className = "stage-meta-tag";
+    span.textContent = tag;
+    metaRow.appendChild(span);
+  }
+  body.appendChild(metaRow);
+
+  const entryData = captureEntries.find(e => e.stage === "afterTurn_entry");
+  const storeData = captureEntries.find(e => e.stage === "capture_store");
+  const skipData = captureEntries.find(e => e.stage === "capture_skip");
+  const commitData = captureEntries.find(e => e.stage === "capture_commit");
+
+  const sessionId = entryData?.sessionId || storeData?.sessionId || "";
+  const ed = entryData?.data || {};
+  const sd = storeData?.data || {};
+  const skd = skipData?.data || {};
+  const cd = commitData?.data || {};
+
+  const pendingTokens = skd.pendingTokens || cd.pendingTokens || 0;
+  const threshold = skd.commitTokenThreshold || cd.commitTokenThreshold || 0;
+  const committed = !!commitData;
+  const archived = cd.archived || false;
+
+  const sumPanel = document.createElement("div");
+  sumPanel.className = "lcm-assemble-summary";
+  const kvs = [
+    ["Session", sessionId || "(unknown)"],
+    ["\u538b\u7f29\u9608\u503c", fmt(threshold) + " tokens"],
+    ["\u65b0\u589e\u6d88\u606f", (ed.newMessageCount || 0) + " \u6761\uff0c~" + fmt(ed.newTurnTokens || 0) + " tokens"],
+    ["\u7d2f\u79ef tokens", fmt(pendingTokens) + "/" + fmt(threshold) + (threshold > 0 ? " (\u5dee " + fmt(threshold - pendingTokens) + ")" : "")],
+  ];
+  if (committed) {
+    kvs.push(["\u662f\u5426\u538b\u7f29", "\u662f (archived=" + (archived ? "\u662f" : "\u5426") + ", status=" + (cd.status || "?") + ")"]);
+  } else if (skipData) {
+    kvs.push(["\u662f\u5426\u538b\u7f29", "\u5426 (\u4f4e\u4e8e\u9608\u503c)"]);
+  }
+  if (sd.stored === false) {
+    kvs.push(["addMessage", "\u8df3\u8fc7 (" + (sd.reason || "empty") + ")"]);
+  } else if (sd.stored === true) {
+    kvs.push(["addMessage", "\u5df2\u5b58\u50a8 (" + fmt(sd.chars || 0) + " chars)"]);
+  }
+
+  for (const [k, v] of kvs) {
+    const row = document.createElement("div");
+    row.className = "lcm-kv";
+    const rl = document.createElement("span"); rl.className = "lcm-kv-label"; rl.textContent = k;
+    const rv = document.createElement("span"); rv.className = "lcm-kv-inline"; rv.textContent = v;
+    row.appendChild(rl); row.appendChild(rv); sumPanel.appendChild(row);
+  }
+  body.appendChild(sumPanel);
+
+  const msgs = ed.messages || [];
+  if (msgs.length > 0) {
+    const details = document.createElement("details");
+    details.className = "stage-expand";
+    const summary = document.createElement("summary");
+    summary.textContent = `addMessage \u5217\u8868 (${msgs.length} \u6761\u6d88\u606f)`;
+    details.appendChild(summary);
+    details.appendChild(renderAssembleMsgList(msgs));
+    body.appendChild(details);
+  }
+
+  card.appendChild(body);
+  return card;
+}
+
 function renderAssembleCard(assembleEntries, engine) {
   const card = document.createElement("div");
   card.className = "stage-card stage-engine";
@@ -1131,21 +1237,44 @@ function renderAssembleCard(assembleEntries, engine) {
   const aoD = outputEntry?.data || {};
   const budget = aiD.tokenBudget || caD.tokenBudget || 0;
   const inputTok = aiD.inputTokenEstimate || 0;
-  const outputTok = aoD.estimatedTokens || caD.estimatedTokens || 0;
+  const outputTok = aoD.estimatedTokens || caD.assembledTokens || caD.estimatedTokens || 0;
   const saved = aoD.tokensSaved || 0;
   const savePct = aoD.savingPct || 0;
   const rawCount = caD.rawMessageCount || 0;
   const sumCount = caD.summaryCount || 0;
+  const archiveCount = caD.archiveCount;
+  const activeCount = caD.activeCount;
+  const hasOvAssemble = archiveCount != null || activeCount != null;
   const budgetPct = budget > 0 ? ((outputTok / budget) * 100).toFixed(1) : "?";
+  const sessionId = inputEntry?.sessionId || contextEntry?.sessionId || outputEntry?.sessionId || "";
+  const passthrough = caD.passthrough;
+  const passthroughReason = caD.reason || "";
+  const reasonMap = {
+    "no_ov_data": "\u65e0 OV \u4f1a\u8bdd\u6570\u636e",
+    "ov_msgs_fewer_than_input": "OV \u6d88\u606f\u5c11\u4e8e\u539f\u59cb\u8f93\u5165",
+    "sanitized_empty": "\u6e05\u6d17\u540e\u5185\u5bb9\u4e3a\u7a7a",
+  };
+
   const sumPanel = document.createElement("div");
   sumPanel.className = "lcm-assemble-summary";
   const summaryKvs = [
-    ["tokenBudget", fmt(budget)],
-    ["\u8f93\u5165 tokens", fmt(outputTok > 0 ? outputTok : inputTok)],
-    ["\u7ec4\u88c5\u540e tokens", fmt(outputTok) + " (\u5360\u9884\u7b97 " + budgetPct + "%)"],
+    ["Session", sessionId || "(unknown)"],
+    ["Token \u9884\u7b97", fmt(budget)],
+    ["\u539f\u59cb\u6d88\u606f", (aiD.messagesCount || 0) + " \u6761\uff0c~" + fmt(inputTok) + " tokens"],
+    ["\u7ec4\u88c5\u540e", (aoD.outputMessagesCount || caD.assembledMessagesCount || 0) + " \u6761\uff0c~" + fmt(outputTok) + " tokens (\u5360\u9884\u7b97 " + budgetPct + "%)"],
   ];
-  if (saved > 0 && sumCount > 0) summaryKvs.push(["\u8282\u7701", fmt(saved) + " tokens (-" + savePct + "%)"]);
-  summaryKvs.push(["\u6d88\u606f\u7ec4\u6210", rawCount + " \u539f\u6587 + " + sumCount + " \u6458\u8981"]);
+  if (saved !== 0) {
+    const sign = saved > 0 ? "-" : "+";
+    summaryKvs.push(["\u8282\u7701", fmt(Math.abs(saved)) + " tokens (" + sign + Math.abs(savePct) + "%)"]);
+  }
+  if (hasOvAssemble) {
+    summaryKvs.push(["\u6d88\u606f\u7ec4\u6210", (archiveCount || 0) + " \u5f52\u6863 + " + (activeCount || 0) + " \u6d3b\u8dc3"]);
+  } else if (rawCount > 0 || sumCount > 0) {
+    summaryKvs.push(["\u6d88\u606f\u7ec4\u6210", rawCount + " \u539f\u6587 + " + sumCount + " \u6458\u8981"]);
+  }
+  if (passthrough) {
+    summaryKvs.push(["\u76f4\u901a\u539f\u56e0", reasonMap[passthroughReason] || passthroughReason || "\u539f\u6837\u900f\u4f20"]);
+  }
   for (const [k, v] of summaryKvs) {
     const row = document.createElement("div");
     row.className = "lcm-kv";
@@ -1231,8 +1360,11 @@ function renderAssembleCard(assembleEntries, engine) {
     const d = contextEntry.data || {};
     const section = renderAssembleSection("上下文组装");
     const sc = d.summaryCount||0, rc = d.rawMessageCount||0, fc = d.freshTailCount||0;
+    const ac = d.archiveCount, amc = d.activeCount;
+    const hasOvCtx = ac != null || amc != null;
     const asmMsgs = d.assembledMessages || [];
     const asmTokSum = asmMsgs.reduce((s, m) => s + (m.tokens || 0), 0);
+    const asmTokDisplay = d.assembledTokens || asmTokSum;
     const intro = document.createElement("div");
     intro.className = "lcm-kv";
     const introLabel = document.createElement("span");
@@ -1240,11 +1372,18 @@ function renderAssembleCard(assembleEntries, engine) {
     introLabel.textContent = "组装结果";
     const introValue = document.createElement("span");
     introValue.className = "lcm-kv-inline";
-    introValue.textContent = `raw=${rc}, summaries=${sc}, freshTail=${fc}, ${fmt(asmTokSum)} token`;
+    introValue.textContent = hasOvCtx
+      ? `archives=${ac||0}, active=${amc||0}, output=${d.assembledMessagesCount||asmMsgs.length}, ~${fmt(asmTokDisplay)} tokens`
+      : `raw=${rc}, summaries=${sc}, freshTail=${fc}, ${fmt(asmTokSum)} token`;
     intro.appendChild(introLabel);
     intro.appendChild(introValue);
     section.appendChild(intro);
-    const kvs = [
+    const kvs = hasOvCtx ? [
+      ["\u5f52\u6863\u6761\u6570", ac||0], ["\u6d3b\u8dc3\u6d88\u606f", amc||0],
+      ["\u7ec4\u88c5\u540e\u6d88\u606f", d.assembledMessagesCount||asmMsgs.length],
+      ["\u7ec4\u88c5\u540e tokens", fmt(asmTokDisplay)],
+      ["passthrough", d.passthrough ? "\u662f" : "\u5426"],
+    ] : [
       ["\u539f\u59cb\u6d88\u606f", rc], ["\u6458\u8981\u6761\u6570", sc],
       ["\u4fdd\u62a4\u5c3e\u90e8", fc], ["\u5c3e\u90e8 tokens", fmt(d.tailTokens)],
       ["estimatedTokens", fmt(d.estimatedTokens) + " (\u6570 content JSON)"], ["tokenBudget", fmt(d.tokenBudget)]
@@ -1281,6 +1420,7 @@ function renderAssembleCard(assembleEntries, engine) {
     const sysPrompt = d.systemPromptAddition;
     const outMsgs = d.messages || [];
     const outTokSum = outMsgs.reduce((s, m) => s + (m.tokens || 0), 0);
+    const outTokDisplay = d.estimatedTokens || outTokSum;
     const intro = document.createElement("div");
     intro.className = "lcm-kv";
     const introLabel = document.createElement("span");
@@ -1288,21 +1428,28 @@ function renderAssembleCard(assembleEntries, engine) {
     introLabel.textContent = "输出消息";
     const introValue = document.createElement("span");
     introValue.className = "lcm-kv-inline";
-    introValue.textContent = `${d.outputMessagesCount || 0} 条，${fmt(outTokSum)} token`;
+    introValue.textContent = `${d.outputMessagesCount || outMsgs.length} 条，~${fmt(outTokDisplay)} tokens`;
     intro.appendChild(introLabel);
     intro.appendChild(introValue);
     section.appendChild(intro);
+    if (d.inputTokenEstimate) {
+      const itRow = document.createElement("div"); itRow.className = "lcm-kv";
+      const itL = document.createElement("span"); itL.className = "lcm-kv-label"; itL.textContent = "\u539f\u59cb tokens";
+      const itV = document.createElement("span"); itV.className = "lcm-kv-inline"; itV.textContent = fmt(d.inputTokenEstimate);
+      itRow.appendChild(itL); itRow.appendChild(itV); section.appendChild(itRow);
+    }
     if (d.estimatedTokens) {
       const etRow = document.createElement("div"); etRow.className = "lcm-kv";
-      const etL = document.createElement("span"); etL.className = "lcm-kv-label"; etL.textContent = "estimatedTokens";
-      const etV = document.createElement("span"); etV.className = "lcm-kv-inline"; etV.textContent = fmt(d.estimatedTokens) + " (\u6570 content JSON)";
+      const etL = document.createElement("span"); etL.className = "lcm-kv-label"; etL.textContent = "\u7ec4\u88c5\u540e tokens";
+      const etV = document.createElement("span"); etV.className = "lcm-kv-inline"; etV.textContent = fmt(d.estimatedTokens);
       etRow.appendChild(etL); etRow.appendChild(etV); section.appendChild(etRow);
     }
-    const saved = d.tokensSaved || 0;
-    if (saved > 0) {
+    const oSaved = d.tokensSaved || 0;
+    if (oSaved !== 0) {
       const row = document.createElement("div"); row.className = "lcm-kv";
-      const rl = document.createElement("span"); rl.className = "lcm-kv-label"; rl.textContent = "\u8282\u7701";
-      const rv = document.createElement("span"); rv.className = "lcm-kv-value lcm-saving"; rv.textContent = fmt(saved) + " tokens (-" + (d.savingPct||0) + "%)";
+      const rl = document.createElement("span"); rl.className = "lcm-kv-label"; rl.textContent = oSaved > 0 ? "\u8282\u7701" : "\u6269\u5c55";
+      const sign = oSaved > 0 ? "-" : "+";
+      const rv = document.createElement("span"); rv.className = "lcm-kv-value" + (oSaved > 0 ? " lcm-saving" : ""); rv.textContent = fmt(Math.abs(oSaved)) + " tokens (" + sign + Math.abs(d.savingPct||0) + "%)";
       row.appendChild(rl); row.appendChild(rv); section.appendChild(row);
     }
     if (sysPrompt) {
