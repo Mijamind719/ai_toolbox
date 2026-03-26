@@ -515,6 +515,23 @@ function assignEngineActionsToRounds(rounds, sections) {
       }
     }
 
+    if (bestIdx < 0) {
+      bestDist = Infinity;
+      for (let i = 0; i < windows.length; i++) {
+        const round = windows[i];
+        if (!round) continue;
+        const dist = Math.min(
+          Math.abs(window.start - round.start),
+          Math.abs(window.end - round.start),
+          Math.abs(window.start - round.end)
+        );
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestIdx = i;
+        }
+      }
+    }
+
     if (bestIdx >= 0) {
       assignments[bestIdx].push(section);
     }
