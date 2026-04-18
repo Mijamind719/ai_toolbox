@@ -1,0 +1,38 @@
+mirrors_dir: research/mirrors
+artifacts_dir: research/artifacts
+reports_dir: research/daily
+
+repos:
+  - name: qmd
+    repo_url: https://github.com/tobi/qmd.git
+    default_branch: main
+    category: context-memory-search
+    watch_paths:
+      - src
+      - skills
+      - .claude-plugin
+    signals:
+      - commits
+      - prs
+      - releases
+      - changelog
+    notes: 重点关注本地混合检索、context tree、agent workflow 与 MCP server 演进
+    bootstrap_commits: 30
+  - name: claude-mem
+    repo_url: https://github.com/thedotmack/claude-mem.git
+    default_branch: main
+    category: context-memory-search
+    watch_paths:
+      - src
+      - plugin
+      - openclaw
+      - ragtime
+      - .claude-plugin
+      - .codex-plugin
+    signals:
+      - commits
+      - prs
+      - releases
+      - changelog
+    notes: 重点关注持久化记忆压缩、progressive disclosure、skill-based search 与 OpenClaw 集成演进
+    bootstrap_commits: 30
