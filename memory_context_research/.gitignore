@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 research/mirrors/
+research/artifacts/*
+!research/artifacts/.gitkeep
+research/daily/*.md
