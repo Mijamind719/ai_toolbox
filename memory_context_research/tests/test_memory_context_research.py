@@ -10,9 +10,10 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from memory_context_research.analyzer import score_commits
 from memory_context_research.config import load_config
 from memory_context_research.main import run
-from memory_context_research.models import RepoState
+from memory_context_research.models import CommitInfo, RepoState
 from memory_context_research.state import load_state, save_state
 
 
@@ -95,6 +96,31 @@ repos:
     assert "检索 / 召回" in report_body or "memory" in report_body
     assert state["memory-repo"].last_commit
     assert summary["status"] == "ok"
+
+
+def test_score_commits_prefers_feature_signal_over_chore_noise():
+    commits = [
+        CommitInfo(
+            sha="1",
+            subject="chore: bump version to 1.2.3",
+            files=["src/memory/version.py"],
+        ),
+        CommitInfo(
+            sha="2",
+            subject="feat(worktree): auto-adopt merged worktrees on worker startup",
+            files=["src/services/infrastructure/WorktreeAdoption.ts"],
+        ),
+        CommitInfo(
+            sha="3",
+            subject="docs: update CHANGELOG.md",
+            files=["CHANGELOG.md"],
+        ),
+    ]
+
+    scored = score_commits(commits, ["src"])
+
+    assert scored[0]["commit"].sha == "2"
+    assert int(scored[0]["score"]) > int(scored[-1]["score"])
 
 
 def _init_git_repo(repo_dir: Path) -> None:

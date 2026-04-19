@@ -63,7 +63,7 @@ def render_repo_section(analysis: RepoAnalysis) -> list[str]:
         f"结论：{analysis.conclusion}",
     ]
 
-    if analysis.status not in {"ok"}:
+    if analysis.status not in {"ok", "maintenance"}:
         evidence = analysis.evidence or {}
         if evidence.get("head_commit"):
             lines.append(f"证据：head={evidence['head_commit']}")
@@ -71,7 +71,7 @@ def render_repo_section(analysis: RepoAnalysis) -> list[str]:
 
     if analysis.new_capabilities:
         lines.append("")
-        lines.append("新增功能：")
+        lines.append("新增功能：" if analysis.status == "ok" else "重点变更：")
         lines.extend([f"- {item}" for item in analysis.new_capabilities])
 
     if analysis.why_it_matters:
@@ -91,7 +91,14 @@ def render_repo_section(analysis: RepoAnalysis) -> list[str]:
         f"- commit range: {evidence.get('base_commit') or 'bootstrap'} -> {evidence.get('head_commit', 'unknown')}"
     )
     lines.append(f"- 相关文件数：{len(evidence.get('matched_files', []))}")
-    if evidence.get("commits"):
+    if evidence.get("signal_commits"):
+        lines.append(
+            "- 高信号 commits: "
+            + ", ".join(
+                f"{item['sha'][:8]} {item['subject']}" for item in evidence["signal_commits"]
+            )
+        )
+    elif evidence.get("commits"):
         lines.append(
             "- 相关 commits: "
             + ", ".join(

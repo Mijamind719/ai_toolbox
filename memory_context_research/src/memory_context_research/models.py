@@ -38,6 +38,7 @@ class RepoState:
 class CommitInfo:
     sha: str
     subject: str
+    files: list[str] = field(default_factory=list)
 
 
 @dataclass

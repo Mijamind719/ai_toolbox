@@ -1,0 +1,17 @@
+{
+  "conclusion": "这轮核心增量聚焦Agent / MCP 集成，而且是连续功能性推进，值得重点跟踪。",
+  "confidence": "high",
+  "new_capabilities": [
+    "Add homeModules.default for home-manager integration",
+    "fix: add USERPROFILE fallback for Windows HOME resolution",
+    "fix(mcp): call enableProductionMode before getDefaultDbPath"
+  ],
+  "ov_value": [
+    "重点看 OV 的 MCP / plugin / agent 侧集成方式。",
+    "建议优先关注 OV 的 session / context 层。",
+    "建议优先关注 OV 的 agent integration 层。",
+    "仓库备注：重点关注本地混合检索、context tree、agent workflow 与 MCP server 演进"
+  ],
+  "repo": "qmd",
+  "status": "ok"
+}

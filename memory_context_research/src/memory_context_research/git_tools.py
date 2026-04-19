@@ -91,7 +91,7 @@ def list_commits_since(repo_path: str | Path, base_commit: str | None) -> list[C
     commits: list[CommitInfo] = []
     for line in lines:
         sha, subject = line.split("\x1f", maxsplit=1)
-        commits.append(CommitInfo(sha=sha, subject=subject))
+        commits.append(CommitInfo(sha=sha, subject=subject, files=list_commit_files(repo_path, sha)))
     commits.reverse()
     return commits
 
@@ -138,6 +138,11 @@ def _contains_research_keyword(value: str) -> bool:
         "skill",
     )
     return any(keyword in value for keyword in keywords)
+
+
+def list_commit_files(repo_path: str | Path, commit: str) -> list[str]:
+    files = _git_lines(repo_path, "show", "--pretty=format:", "--name-only", commit)
+    return [item for item in files if item]
 
 
 def _git(repo_path: str | Path, *args: str) -> str:

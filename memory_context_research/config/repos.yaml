@@ -36,3 +36,38 @@ repos:
       - changelog
     notes: 重点关注持久化记忆压缩、progressive disclosure、skill-based search 与 OpenClaw 集成演进
     bootstrap_commits: 30
+  - name: lossless-claw
+    repo_url: https://github.com/Martian-Engineering/lossless-claw.git
+    default_branch: main
+    category: context-engine-memory
+    watch_paths:
+      - src
+      - skills/lossless-claw
+      - specs
+      - tui
+    signals:
+      - commits
+      - prs
+      - releases
+      - changelog
+    notes: 重点关注 LCM DAG summarization、上下文组装、长期记忆召回工具与 OpenClaw context-engine 集成演进
+    bootstrap_commits: 30
+  - name: mem0
+    repo_url: https://github.com/mem0ai/mem0.git
+    default_branch: main
+    category: memory-platform
+    watch_paths:
+      - mem0
+      - server
+      - mem0-ts
+      - openclaw
+      - skills
+      - cli
+      - mem0-plugin
+    signals:
+      - commits
+      - prs
+      - releases
+      - changelog
+    notes: 重点关注多层记忆建模、memory search / update、SDK / server / plugin 演进，以及 OpenClaw 与 agent 集成
+    bootstrap_commits: 30

@@ -1,0 +1,306 @@
+{
+  "conclusion": "这轮核心增量聚焦Agent / MCP 集成，而且是连续功能性推进，值得重点跟踪。",
+  "confidence": "high",
+  "error": null,
+  "evidence": {
+    "base_commit": "7b3cb550fe1fbea67cafbdd7969d9448973b0bff",
+    "changed_files": [
+      "CHANGELOG.md",
+      "finetune/pyproject.toml",
+      "finetune/uv.lock",
+      "flake.nix",
+      "pnpm-lock.yaml",
+      "src/cli/qmd.ts",
+      "src/llm.ts",
+      "src/mcp/server.ts",
+      "src/store.ts",
+      "test/cli.test.ts",
+      "test/llm.test.ts",
+      "test/mcp.test.ts",
+      "test/sdk.test.ts",
+      "test/store.helpers.unit.test.ts",
+      "test/store.test.ts",
+      "vitest.config.ts"
+    ],
+    "commit_count": 30,
+    "commits": [
+      {
+        "files": [
+          "test/store.test.ts"
+        ],
+        "sha": "32e504c88334a8c51e8cc9c526317f7a8973e72e",
+        "subject": "fix(test): remove duplicate path/handelize tests from store.test.ts"
+      },
+      {
+        "files": [
+          "src/store.ts",
+          "test/store.helpers.unit.test.ts"
+        ],
+        "sha": "66e70c028eb47b7f92861f15de0db817400cf0b8",
+        "subject": "fix(test): reset _productionMode in getDefaultDbPath test"
+      },
+      {
+        "files": [
+          "flake.nix"
+        ],
+        "sha": "a02b9fe016acaabdf1fa0bca7b3f7bc107694730",
+        "subject": "fix: update nix flake hash and stabilize bun test ordering"
+      },
+      {
+        "files": [
+          "flake.nix"
+        ],
+        "sha": "65cd1b3fd02891d1ee0eefa751620918664fa321",
+        "subject": "fix(nix): update aarch64-darwin node_modules hash"
+      },
+      {
+        "files": [
+          "flake.nix"
+        ],
+        "sha": "986fca3564985742cb2b402f374837bd621a66bf",
+        "subject": "Add homeModules.default for home-manager integration"
+      },
+      {
+        "files": [
+          "flake.nix"
+        ],
+        "sha": "c2f3a4037204066455662492518384c9f3a4d247",
+        "subject": "Derive flake version from package.json"
+      },
+      {
+        "files": [
+          "src/cli/qmd.ts",
+          "src/llm.ts",
+          "test/llm.test.ts"
+        ],
+        "sha": "26e3d0c07789f99932d996bb78137dab1686d123",
+        "subject": "fix(status): avoid build attempts during device probe"
+      },
+      {
+        "files": [
+          "src/cli/qmd.ts",
+          "src/store.ts",
+          "test/cli.test.ts",
+          "test/store.test.ts"
+        ],
+        "sha": "8404cc3bb119ae1df6687d67049e2499e581eb63",
+        "subject": "fix(uri): include index in custom qmd links"
+      },
+      {
+        "files": [
+          "CHANGELOG.md",
+          "src/llm.ts",
+          "test/llm.test.ts"
+        ],
+        "sha": "1ecb5c9f96f3b5efcc7f83d91997203750a97920",
+        "subject": "Fix QMD_LLAMA_GPU backend override handling"
+      },
+      {
+        "files": [
+          "src/cli/qmd.ts"
+        ],
+        "sha": "17074eafa1eca7ef7dadcb7fed4c87352a66ebc6",
+        "subject": "fix: include line in CLI --json search output"
+      },
+      {
+        "files": [
+          "src/mcp/server.ts"
+        ],
+        "sha": "9dd8a738f936363de911e674c4dde55cd0573033",
+        "subject": "fix(mcp): call enableProductionMode before getDefaultDbPath"
+      },
+      {
+        "files": [
+          "src/store.ts",
+          "test/cli.test.ts",
+          "test/store.helpers.unit.test.ts"
+        ],
+        "sha": "9fb9de4fd253896c308639b9f2ae8ff8b0a65fd0",
+        "subject": "fix: preserve original case in handelize()"
+      },
+      {
+        "files": [
+          "CHANGELOG.md",
+          "src/cli/qmd.ts",
+          "src/store.ts",
+          "test/store.test.ts"
+        ],
+        "sha": "fee576bf98c181bc010c3478eea6a2cfaa209384",
+        "subject": "fix: migrate legacy lowercase paths on reindex"
+      },
+      {
+        "files": [],
+        "sha": "33bdf9a30820cea12ae4c07a2b50bdbf6282653f",
+        "subject": "Merge pull request #537 from fenrire/fix/mcp-production-mode"
+      },
+      {
+        "files": [],
+        "sha": "9990ca01b443a69006f6fcd632d7213b68d1df37",
+        "subject": "Merge pull request #534 from erskingardner/fix-529-qmd-llama-gpu-override"
+      },
+      {
+        "files": [],
+        "sha": "414fee520bf9c5e1dc7e11749376dc86fdd48c1d",
+        "subject": "Merge pull request #533 from rymalia/fix/json-line-field"
+      },
+      {
+        "files": [
+          "src/cli/qmd.ts",
+          "src/llm.ts",
+          "test/llm.test.ts"
+        ],
+        "sha": "171e9e3e656b63cbdb00edd64437471dc0b252cc",
+        "subject": "Merge pull request #530 from kuishou68/fix-status-no-build-probe"
+      },
+      {
+        "files": [
+          "src/store.ts",
+          "test/store.test.ts"
+        ],
+        "sha": "0adbdeb337bb109bf9b131a80452e85670a49b9f",
+        "subject": "fix(store): surface actionable sqlite-vec guidance"
+      },
+      {
+        "files": [
+          "CHANGELOG.md",
+          "src/cli/qmd.ts"
+        ],
+        "sha": "bb5becaf81bcebb1ea093a0a07f8d455a627033d",
+        "subject": "Merge remote-tracking branch 'origin/main' into fix/handelize-preserve-case"
+      },
+      {
+        "files": [
+          "src/llm.ts"
+        ],
+        "sha": "f53ee26213c7ef92a0759364f5d64694ebfb534c",
+        "subject": "fix: detect and explain non-GGUF model files after download"
+      },
+      {
+        "files": [
+          "src/llm.ts",
+          "src/store.ts",
+          "test/llm.test.ts",
+          "test/store.test.ts"
+        ],
+        "sha": "e4990e470e4da421bd2accb9897a9d7825b65052",
+        "subject": "Harden embedding overflow handling"
+      },
+      {
+        "files": [
+          "src/store.ts"
+        ],
+        "sha": "77e71d09f22cda56af4785c8c189123e528abe9e",
+        "subject": "fix: add USERPROFILE fallback for Windows HOME resolution"
+      },
+      {
+        "files": [],
+        "sha": "b2ffd10cb8494e0f745f18473b77f4c58c929b6b",
+        "subject": "Merge pull request #555 from max0n232/fix/windows-home-fallback"
+      },
+      {
+        "files": [
+          "src/store.ts"
+        ],
+        "sha": "b1dc8480862422ffc78f7cfb2a5f217aa3916361",
+        "subject": "Merge pull request #554 from bek91/codex/harden-embedding-overflow"
+      },
+      {
+        "files": [
+          "src/llm.ts"
+        ],
+        "sha": "89df31142d6258af1c0e34f8474a82c9ec27a466",
+        "subject": "Merge pull request #548 from kevinburkesegment/fix-gguf-magic-error"
+      },
+      {
+        "files": [
+          "src/store.ts",
+          "test/store.test.ts"
+        ],
+        "sha": "46c4dfdaac9992d0d71740f5b4bd4f551f9f12d5",
+        "subject": "Merge pull request #545 from kuishou68/fix-sqlite-vec-actionable-guidance"
+      },
+      {
+        "files": [
+          "src/cli/qmd.ts",
+          "src/store.ts",
+          "test/store.test.ts"
+        ],
+        "sha": "3295294be35984e80fbafcfa49e100ae858ec34f",
+        "subject": "Merge pull request #532 from kuishou68/fix-qmd-uri-index-query"
+      },
+      {
+        "files": [
+          "src/cli/qmd.ts",
+          "src/store.ts",
+          "test/cli.test.ts",
+          "test/store.test.ts"
+        ],
+        "sha": "525b9970cd8a551786fcac286af1088e8738b34a",
+        "subject": "Merge pull request #546 from junmo-kim/fix/handelize-preserve-case"
+      },
+      {
+        "files": [
+          "finetune/pyproject.toml",
+          "finetune/uv.lock",
+          "pnpm-lock.yaml"
+        ],
+        "sha": "3023ab3c997fcc486679f1dd511a1083837ec7ba",
+        "subject": "fix: bump transitive deps to resolve security alerts"
+      },
+      {
+        "files": [
+          "test/mcp.test.ts",
+          "test/sdk.test.ts",
+          "test/store.test.ts",
+          "vitest.config.ts"
+        ],
+        "sha": "cfd640ed3499769b3ee41a7118119ff884dbe8c5",
+        "subject": "fix(test): resolve LLM test timeouts by disabling file parallelism"
+      }
+    ],
+    "head_commit": "cfd640ed3499769b3ee41a7118119ff884dbe8c5",
+    "improvement_commit_count": 5,
+    "matched_files": [
+      "src/cli/qmd.ts",
+      "src/llm.ts",
+      "src/mcp/server.ts",
+      "src/store.ts"
+    ],
+    "repo_path": "/Users/quemingjian/Source/ai_toolbox/memory_context_research/research/mirrors/qmd",
+    "signal_commit_count": 8,
+    "signal_commits": [
+      {
+        "score": 9,
+        "sha": "986fca3564985742cb2b402f374837bd621a66bf",
+        "subject": "Add homeModules.default for home-manager integration"
+      },
+      {
+        "score": 7,
+        "sha": "77e71d09f22cda56af4785c8c189123e528abe9e",
+        "subject": "fix: add USERPROFILE fallback for Windows HOME resolution"
+      },
+      {
+        "score": 7,
+        "sha": "9dd8a738f936363de911e674c4dde55cd0573033",
+        "subject": "fix(mcp): call enableProductionMode before getDefaultDbPath"
+      }
+    ]
+  },
+  "new_capabilities": [
+    "Add homeModules.default for home-manager integration",
+    "fix: add USERPROFILE fallback for Windows HOME resolution",
+    "fix(mcp): call enableProductionMode before getDefaultDbPath"
+  ],
+  "ov_value": [
+    "重点看 OV 的 MCP / plugin / agent 侧集成方式。",
+    "建议优先关注 OV 的 session / context 层。",
+    "建议优先关注 OV 的 agent integration 层。",
+    "仓库备注：重点关注本地混合检索、context tree、agent workflow 与 MCP server 演进"
+  ],
+  "repo": "qmd",
+  "status": "ok",
+  "why_it_matters": [
+    "这轮有 8 个高信号 commit 指向Agent / MCP 集成，不是单纯的发布或文档噪音。",
+    "相关改动覆盖 4 个目标文件，说明这条方向已经进入实现层而非停留在说明层。"
+  ]
+}
